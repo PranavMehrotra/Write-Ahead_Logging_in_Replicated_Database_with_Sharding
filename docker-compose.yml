@@ -1,0 +1,21 @@
+version: '3.9'
+
+services:
+
+  load_balancer:
+    build: load_balancer/ 
+    image: load_balancer_img
+    container_name: load_balancer_con
+    ports:
+      - "5000:5000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    privileged: true
+    networks:
+      network1:
+        aliases:
+          - load_balancer
+
+networks:
+  network1:
+    name: mynet

@@ -326,6 +326,13 @@ class HeartBeat(threading.Thread):
                     server_shard_map = {server_name: serv_to_shard[server_name]}
                     # lb.add_servers(1, server_shard_map)
                     
+                    ### DO PRIMARY SERVER ELECTION FOR EACH SHARD OF THIS SERVER (FOR WHICH THIS SERVER WAS PRIMARY) BEFORE ADDING THE SERVER BACK TO THE SYSTEM
+                    server_shards = serv_to_shard[server_name]
+                    
+                    self.elect_primary_for_all_shards(server_name, server_shards)
+                    
+                    ### ADD THE SERVER BACK TO THE SYSTEM                    
+                    
                     # send request to the load balancer to add the servers and their server to shard mapping
                     request_payload = {
                         "num_servers": 1,

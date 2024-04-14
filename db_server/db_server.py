@@ -701,7 +701,7 @@ if __name__ == '__main__':
 #                     "status": "failure"
 #                 }
 #                 return web.json_response(response_json, status=400)
-        servers_to_shard
+        # servers_to_shard
 #         response_json = {
 #             "message": f"Stopped Heartbeat threads for servers: {', '.join(servers)}",
 #             "status": "success"

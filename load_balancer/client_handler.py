@@ -19,7 +19,7 @@ INT_MAX = 2**31 - 1  # 2147483647
 COMMIT_ROLLBACK_RETRY_CNT = 3
 
 lb : LoadBalancer = ""
-hb_threads: Dict[str, HeartBeat] = {}
+# hb_threads: Dict[str, HeartBeat] = {}
 
 checkpointer_thread: Checkpointer = ""
 
@@ -241,6 +241,14 @@ def synchronous_communicate_with_server(server, endpoint, payload={}):
         return 500, {"message": f"{e}"}
 
 
+def synchronous_communicate_with_db_server(endpoint, payload={}):
+    try:
+        request_url = f'http://{db_server_hostname}:{SERVER_PORT}/{endpoint}'
+        response = requests.post(request_url, json=payload)
+        return response.status_code, response.json()
+    except Exception as e:
+        return 500, {"message": f"{e}"}
+
 # async def home(request):
 #     global lb
     
@@ -300,7 +308,7 @@ def synchronous_communicate_with_server(server, endpoint, payload={}):
 
 async def add_server_handler(request):
     global lb
-    global hb_threads
+    # global hb_threads
     global shardT
     global shardT_lock
     global stud_id_low
@@ -384,12 +392,33 @@ async def add_server_handler(request):
     if err!="":
         print(f"client_handler: Error: {err}")
 
-    # Spawn the heartbeat threads for the added servers
-    for server in added_servers:
-        # t1 = HeartBeat(lb, server, StudT_schema)
-        t1 = HeartBeat(server, StudT_schema)
-        hb_threads[server] = t1
-        t1.start()
+    # # Spawn the heartbeat threads for the added servers
+    # for server in added_servers:
+    #     t1 = HeartBeat(server, StudT_schema)
+    #     hb_threads[server] = t1
+    #     t1.start()
+    
+    # send message to db_server to start the heartbeat thread for the added servers
+    payload = {
+        "num_servers": num_added,
+        "servers": added_servers
+    }
+    status, response = synchronous_communicate_with_db_server("init_servers_hb", payload)
+    if status!=200:
+        print(f"client_handler: Failed to start heartbeat threads for the added servers")
+        print(f"client_handler: {response.get('message', 'Unknown Error')}", flush=True)
+        
+        ### WHAT TO DO IN THIS CASE?? -> KILL THE SERVERS AND REMOVE THEM FROM THE SYSTEM
+        
+        response_json = {
+            "message": f"<Error>: Failed to add servers to the system",
+            "status": "failure"
+        }
+        return web.json_response(response_json, status=400)
+
+    # if status is 200, then hb threads for the added servers have started successfully, s
+    # so continue with config stage
+    
 
     # Sleep before sending the config request to the added servers
     await asyncio.sleep(SLEEP_BEFORE_FIRST_REQUEST)
@@ -422,7 +451,7 @@ async def add_server_handler(request):
 
 async def remove_server_handler(request):
     global lb
-    global hb_threads
+    # global hb_threads
 
     try:
         # Get a payload json from the request
@@ -468,11 +497,34 @@ async def remove_server_handler(request):
     if err!="":
         print(f"client_handler: Error: {err}")
 
-    # Kill the heartbeat threads for the removed servers
-    for server in removed_servers:
-        hb_threads[server].stop()
-        del hb_threads[server]
-        # close the docker containers and corresponding threads for the servers that were finally removed
+    # # Kill the heartbeat threads for the removed servers
+    # for server in removed_servers:
+    #     hb_threads[server].stop()
+    #     del hb_threads[server]
+
+    # send message to db_server to stop the heartbeat thread for the removed servers
+    payload = {
+        "num_servers": num_removed,
+        "servers": removed_servers
+    }
+    status, response = synchronous_communicate_with_db_server("stop_servers_hb", payload)
+    if status!=200:
+        print(f"client_handler: Failed to stop heartbeat threads for the removed servers")
+        print(f"client_handler: {response.get('message', 'Unknown Error')}", flush=True)
+        
+        ### WHAT TO DO IN THIS CASE?? -> IF HB THREADS ARE NOT STOPPED, THEN THE SERVERS WILL BE RESPAWNED BY THE HEARTBEAT THREADS
+        
+        response_json = {
+            "message": f"<Error>: Failed to remove servers from the system",
+            "status": "failure"
+        }
+        return web.json_response(response_json, status=400)
+
+    # if status is 200, then hb threads for the removed servers have stopped successfully, 
+    # so continue with killing the server containers
+        
+    for server in removed_servers:     
+        # close the docker containers and corresponding threads for the servers that were finally removed   
         kill_server_cntnr(server)
 
     # Return the full list of servers in the system
@@ -1190,6 +1242,8 @@ def heartbeat_db_server():
 
 
 async def spawn_and_config_db_server(serv_to_shard: Dict[str, list]):
+    global StudT_schema
+    
     # Spawn the db_server container
     if not spawn_db_server_cntnr(db_server_hostname):
         response_json = {
@@ -1258,7 +1312,7 @@ async def spawn_and_config_db_server(serv_to_shard: Dict[str, list]):
 
 async def init_handler(request):
     global lb
-    global hb_threads
+    # global hb_threads
     global shardT
     global shardT_lock
     global StudT_schema
@@ -1302,12 +1356,49 @@ async def init_handler(request):
     # If the db_server container is already running, then remove the existing servers, stop the heartbeat threads
     if heartbeat_db_server():
         # Kill the heartbeat threads for tem_servers
-        tem_servers = list(hb_threads.keys())
-        for server in tem_servers:
-            hb_threads[server].stop()
-            del hb_threads[server]
-            # close the docker containers and corresponding threads for the servers that were finally removed
+        # tem_servers = list(hb_threads.keys())
+        
+        status, response = synchronous_communicate_with_db_server("list_active_hb_threads", payload={})
+        if status!=200:
+            print(f"client_handler: <Error> Failed to list active heartbeat threads from db_server: {response.get('message', 'Unknown Error')}", flush=True)
+            response_json = {
+                "message": f"<Error>: Failed to initialize the database",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=500)
+
+        tem_servers = response.get("active_hb_threads", [])
+        
+        # # stop the heartbeat threads for the servers that were finally removed
+        # for server in tem_servers:
+        #     hb_threads[server].stop()
+        #     del hb_threads[server]
+            
+        # send message to db_server to stop the heartbeat thread for the removed servers
+        payload = {
+            "num_servers": len(tem_servers),
+            "servers": tem_servers
+        }
+        status, response = synchronous_communicate_with_db_server("stop_servers_hb", payload)
+        if status!=200:
+            print(f"client_handler: Failed to stop heartbeat threads for the removed servers")
+            print(f"client_handler: {response.get('message', 'Unknown Error')}", flush=True)
+            
+            ### WHAT TO DO IN THIS CASE?? -> IF HB THREADS ARE NOT STOPPED, THEN THE SERVERS WILL BE RESPAWNED BY THE HEARTBEAT THREADS
+            
+            response_json = {
+                "message": f"<Error>: Failed to remove servers from the system",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
+
+        # if status is 200, then hb threads for the removed servers have stopped successfully, 
+        # so continue with killing the server containers            
+            
+        for server in tem_servers:    
             kill_server_cntnr(server)
+        
+        
         # Stop checkpointer thread
         checkpointer_thread.stop()
         del checkpointer_thread
@@ -1323,8 +1414,10 @@ async def init_handler(request):
         # Clear the shardT and stud_id_low
         shardT = {}
         stud_id_low = []
-        # Clear the hb_threads
-        hb_threads = {}
+        
+        # # Clear the hb_threads
+        # hb_threads = {}
+        
         shardT_lock.release_writer()
 
         # Start a new checkpointer thread
@@ -1380,12 +1473,32 @@ async def init_handler(request):
     # Populate the StudT_schema
     StudT_schema = studt_schema
     
-    # Spawn the heartbeat threads for the added servers
-    for server in added_servers:
-        t1 = HeartBeat(server, StudT_schema)
-        hb_threads[server] = t1
-        t1.start()
+    # # Spawn the heartbeat threads for the added servers
+    # for server in added_servers:
+    #     t1 = HeartBeat(server, StudT_schema)
+    #     hb_threads[server] = t1
+    #     t1.start()
+    
+    # send message to db_server to start the heartbeat thread for the added servers
+    payload = {
+        "num_servers": num_added,
+        "servers": added_servers
+    }
+    status, response = synchronous_communicate_with_db_server("init_servers_hb", payload)
+    if status!=200:
+        print(f"client_handler: Failed to start heartbeat threads for the added servers")
+        print(f"client_handler: {response.get('message', 'Unknown Error')}", flush=True)
+        
+        ### WHAT TO DO IN THIS CASE?? -> KILL THE SERVERS AND REMOVE THEM FROM THE SYSTEM
+        
+        response_json = {
+            "message": f"<Error>: Failed to initisalize the database",
+            "status": "failure"
+        }
+        return web.json_response(response_json, status=400)
 
+    # if status is 200, then hb threads for the added servers have started successfully, s
+    # so continue with config stage
 
     
     # await asyncio.sleep(SLEEP_BEFORE_FIRST_REQUEST)
@@ -1429,7 +1542,6 @@ async def init_handler(request):
 
 async def status_handler(request):
     global lb
-    global hb_threads
     global shardT
     global StudT_schema
     global init_done
@@ -1490,11 +1602,32 @@ def recover_from_db_server():
                     print(f"client_handler: Failed to add servers to the system")
                     return False
                 print(f"client_handler: Added {num_added} servers to the system")
-                # Spawn the heartbeat threads for the added servers
-                for server in added_servers:
-                    t1 = HeartBeat(server, StudT_schema)
-                    hb_threads[server] = t1
-                    t1.start()
+                
+                # # Spawn the heartbeat threads for the added servers
+                # for server in added_servers:
+                #     t1 = HeartBeat(server, StudT_schema)
+                #     hb_threads[server] = t1
+                #     t1.start()
+                
+                # send message to db_server to start the heartbeat thread for the added servers
+                payload = {
+                    "num_servers": num_added,
+                    "servers": added_servers
+                }
+                status, response = synchronous_communicate_with_db_server("init_servers_hb", payload)
+                if status!=200:
+                    print(f"client_handler: Failed to start heartbeat threads for the added servers")
+                    print(f"client_handler: {response.get('message', 'Unknown Error')}", flush=True)
+                    
+                    ### WHAT TO DO IN THIS CASE?? -> KILL THE SERVERS AND REMOVE THEM FROM THE SYSTEM
+                    
+                    response_json = {
+                        "message": f"<Error>: Failed to recover from db_server",
+                        "status": "failure"
+                    }
+                    # return web.json_response(response_json, status=400)   
+                    return False             
+                
                 return True
             else:
                 return False
@@ -1513,17 +1646,6 @@ async def not_found(request):
     }
     return web.json_response(response_json, status=400)
 
-def interrupt_handler(signum, frame):
-    # Handle the interrupt signal
-    print(f"client_handler: Received Interrupt Signal {signum}, Exiting...", flush=True)
-    # Kill the heartbeat threads
-    for server in hb_threads.keys():
-        hb_threads[server].stop()
-        kill_server_cntnr(server)
-    # Kill the db_server container
-    kill_db_server_cntnr(db_server_hostname)
-    exit(0)
-    
     
 async def list_servers_from_lb(request):
     global lb
@@ -1557,9 +1679,9 @@ async def list_servers_from_lb(request):
             return web.json_response(response_json, status=200)
             
     except Exception as e:
-        print(f"client_handler: <Error> : {e}", flush=True)
+        print(f"client_handler: <Error> : {str(e)}", flush=True)
         response_json = {
-            "message": f"<Error>: {e}",
+            "message": f"<Error>: {str(e)}",
             "status": "failure"
         }
         return web.json_response(response_json, status=400)
@@ -1609,9 +1731,9 @@ async def add_servers_to_lb(request):
             return web.json_response(response_json, status=400)
         
     except Exception as e:
-        print(f"client_handler: <Error> : {e}", flush=True)
+        print(f"client_handler: <Error> : {str(e)}", flush=True)
         response_json = {
-            "message": f"<Error>: {e}",
+            "message": f"<Error>: {str(e)}",
             "status": "failure"
         }
         return web.json_response(response_json, status=400)
@@ -1663,9 +1785,9 @@ async def remove_servers_from_lb(request):
             return web.json_response(response_json, status=400)
         
     except Exception as e:
-        print(f"client_handler: <Error> : {e}", flush=True)
+        print(f"client_handler: <Error> : {str(e)}", flush=True)
         response_json = {
-            "message": f"<Error>: {e}",
+            "message": f"<Error>: {str(e)}",
             "status": "failure"
         }
         return web.json_response(response_json, status=400)
@@ -1678,16 +1800,14 @@ async def list_shard_servers(request):
 
 def run_load_balancer():
     global lb
-    global hb_threads
+    # global hb_threads
     global shardT
     global shardT_lock
     global db_server_hostname
     global checkpointer_thread
     random.seed(RANDOM_SEED)
-    signal.signal(signal.SIGINT, interrupt_handler)
-    signal.signal(signal.SIGTERM, interrupt_handler)
-    signal.signal(signal.SIGQUIT, interrupt_handler)
-    signal.signal(signal.SIGABRT, interrupt_handler)
+    
+
     ### Add check if DB server already exists(by sending heartbeat to it)
     ### if yes, then copy the configurations and start heartbeat threads for them 
     ### DO NOT SPAWN NEW SERVERS, cause they might be already running, if not, heartbeat will take care of it
@@ -1734,8 +1854,8 @@ def run_load_balancer():
 
     print("Load Balancer Ready!", flush=True)
 
-    for thread in hb_threads.values():
-        thread.join()
+    # for thread in hb_threads.values():
+    #     thread.join()
 
 
 # if __name__ == "__main__":

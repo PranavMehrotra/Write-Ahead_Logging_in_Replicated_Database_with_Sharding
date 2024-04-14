@@ -3,9 +3,6 @@ import sys
 import os
 import requests
 import time
-import requests
-import aiohttp
-import asyncio
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 

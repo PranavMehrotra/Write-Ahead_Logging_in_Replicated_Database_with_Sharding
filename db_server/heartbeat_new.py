@@ -4,12 +4,10 @@ import os
 import requests
 import time
 import requests
-import aiohttp
-import asyncio
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from load_balancer import LoadBalancer
+
 from load_balancer.docker_utils import kill_server_cntnr
 
 HEARTBEAT_INTERVAL = 0.2

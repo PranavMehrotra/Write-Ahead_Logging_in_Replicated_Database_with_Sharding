@@ -28,6 +28,7 @@ class Checkpointer(threading.Thread):
         self._stop_event = threading.Event()
         self._write_MapT = threading.Event()
         self._write_ShardT = threading.Event()
+        self._wake_up = threading.Event()
 
     def stop(self):
         self._stop_event.set()
@@ -37,46 +38,53 @@ class Checkpointer(threading.Thread):
     
     def write_MapT(self):
         self._write_MapT.set()
+        self._wake_up.set()
 
     def should_write_MapT(self):
         return self._write_MapT.is_set()
     
     def write_ShardT(self):
         self._write_ShardT.set()
+        self._wake_up.set()
 
     def should_write_ShardT(self):
         return self._write_ShardT.is_set()
     
+    def wait_for_wake_up(self):
+        self._wake_up.wait()
+        self._wake_up.clear()
+        return True
+    
     def checkpoint(self):
         print("checkpointer: Checkpointing shardT", flush=True)
         success = True
-        if not self.should_write_ShardT():
-            # Construct a payload for the shardT checkpoint, then send PUT to /update endpoint
-            payload = {
-                "table": "ShardT",
-                "column": self._key_column,
-                "keys": [],
-                "update_column": self._update_column,
-                "update_vals": []
-            }
-            # Acquire a read lock on the shardT
-            self._shardT_lock.acquire_reader()
-            if len(self._shardT) == 0:
-                # Release the read lock on the shardT
-                self._shardT_lock.release_reader()
-                return
-            tem_keys, tem_vals = zip(*[(key, val[2]) for key, val in self._shardT.items()])
-            # Release the read lock on the shardT
-            self._shardT_lock.release_reader()
-            payload["keys"] = list(tem_keys)
-            payload["update_vals"] = list(tem_vals)
-            # Send the PUT request to the db server
-            response = requests.put(f'http://{self._db_server_name}:{self._db_server_port}/update', json=payload)
-            if response.status_code != 200:
-                print(f"checkpointer: Error in updating shardT, message: {response.text}", flush=True)
-                success = False
+        # if not self.should_write_ShardT():
+        #     # Construct a payload for the shardT checkpoint, then send PUT to /update endpoint
+        #     payload = {
+        #         "table": "ShardT",
+        #         "column": self._key_column,
+        #         "keys": [],
+        #         "update_column": self._update_column,
+        #         "update_vals": []
+        #     }
+        #     # Acquire a read lock on the shardT
+        #     self._shardT_lock.acquire_reader()
+        #     if len(self._shardT) == 0:
+        #         # Release the read lock on the shardT
+        #         self._shardT_lock.release_reader()
+        #         return
+        #     tem_keys, tem_vals = zip(*[(key, val[2]) for key, val in self._shardT.items()])
+        #     # Release the read lock on the shardT
+        #     self._shardT_lock.release_reader()
+        #     payload["keys"] = list(tem_keys)
+        #     payload["update_vals"] = list(tem_vals)
+        #     # Send the PUT request to the db server
+        #     response = requests.put(f'http://{self._db_server_name}:{self._db_server_port}/update', json=payload)
+        #     if response.status_code != 200:
+        #         print(f"checkpointer: Error in updating shardT, message: {response.text}", flush=True)
+        #         success = False
         
-        else:
+        if self.should_write_ShardT():
             # reset the write_ShardT event
             self._write_ShardT.clear()
             print("checkpointer: Checkpointing ShardT by overwriting new ShardT", flush=True)
@@ -92,7 +100,7 @@ class Checkpointer(threading.Thread):
             # Acquire a read lock on the shardT
             self._shardT_lock.acquire_reader()
             # Construct the data for the ShardT table
-            payload["data"] = [{"Stud_id_low": key, "Shard_id": val[0], "Shard_size": val[1], "valid_idx": val[2]} for key, val in self._shardT.items()]
+            payload["data"] = [{"Stud_id_low": key, "Shard_id": val[0], "Shard_size": val[1]} for key, val in self._shardT.items()]
             # Release the read lock on the shardT
             self._shardT_lock.release_reader()
             # Send the POST request to the db server
@@ -132,8 +140,8 @@ class Checkpointer(threading.Thread):
 
     def run(self):
         print(f"checkpointer: Checkpointer thread started for server: {self._db_server_name}", flush=True)
-        time.sleep(FIRST_CHECKPOINT_AFTER)
-        while True:
+        # time.sleep(FIRST_CHECKPOINT_AFTER)
+        while self.wait_for_wake_up():
             try:
                 # Check if the thread is stopped
                 if self.stopped():
@@ -144,5 +152,5 @@ class Checkpointer(threading.Thread):
             except Exception as e:
                 print(f"checkpointer: Error in checkpointing: {str(e)}", flush=True)
 
-            time.sleep(CHECKPOINT_INTERVAL)
+            # time.sleep(CHECKPOINT_INTERVAL)
 

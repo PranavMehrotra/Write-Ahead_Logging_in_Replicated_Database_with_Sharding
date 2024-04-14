@@ -7,6 +7,9 @@ from typing import Dict, List, TextIO
 
 SERVER_PORT = 5000
 MAJORITY_CRITERIA = 0.5
+WRITE_STR_LOG = "write"
+UPDATE_STR_LOG = "update"
+DELETE_STR_LOG = "delete"
 
 class Manager:
     def __init__(self,host='localhost',user='root',password='',db='server_database'):
@@ -66,7 +69,7 @@ class Manager:
                     if status != 200:
                         return message, status
                     # Create log file for write ahead logging
-                    log_file = open(f'{shard}_wal.log', 'a', buffering=1)
+                    log_file = open(f'~/logs/{shard}_wal.log', 'a', buffering=1)
                     self.log_files[shard] = log_file
                     self.last_tx_ids[shard] = 0
                     self.log_file_locks[shard] = RWLock()
@@ -151,13 +154,13 @@ class Manager:
             return e,500
         
     
-    def write_ahead_logging(self, log_file: TextIO, tx_id, commit = True, data = None):
+    def write_ahead_logging(self, log_file: TextIO, tx_id, type:str, commit = True, data = None):
         if commit:
-            log_file.write(f"0_{tx_id}\n")
-            print(f"log_file: 0_{tx_id}\n", flush=True)
+            log_file.write(f"0_{tx_id}_{type}\n")
+            print(f"log_file: 0_{tx_id}_{type}\n", flush=True)
         else:
-            log_file.write(f"1_{tx_id}_{data}\n")
-            print(f"log_file: 1_{tx_id}_{data}\n", flush=True)
+            log_file.write(f"1_{tx_id}_{type}_{data}\n")
+            print(f"log_file: 1_{tx_id}_{type}_{data}\n", flush=True)
 
 
     async def Write_database(self,request_json):
@@ -242,7 +245,7 @@ class Manager:
                 self.last_tx_ids[tablename] += 1
                 tx_id = self.last_tx_ids[tablename]
                 log_file = self.log_files[tablename]
-                self.write_ahead_logging(log_file, tx_id, commit=False, data=f"[{row_str}]")
+                self.write_ahead_logging(log_file, tx_id, WRITE_STR_LOG, commit=False, data=f"[{row_str}]")
                 lock.release_writer()
 
                 responses = []
@@ -273,7 +276,7 @@ class Manager:
                         return message, status,valid_idx
                     # WAL
                     lock.acquire_writer()
-                    self.write_ahead_logging(log_file, tx_id, commit=True)
+                    self.write_ahead_logging(log_file, tx_id, WRITE_STR_LOG, commit=True)
                     lock.release_writer()
 
                     # Refresh the failed servers
@@ -308,7 +311,8 @@ class Manager:
                 # WAL
                 lock = self.log_file_locks[tablename]
                 lock.acquire_writer()
-                self.write_ahead_logging(self.log_files[tablename], tx_id, commit=False, data=f"[{row_str}]")
+                log_file = self.log_files[tablename]
+                self.write_ahead_logging(log_file, tx_id, WRITE_STR_LOG, commit=False, data=f"[{row_str}]")
                 lock.release_writer()
 
                 message, status = self.sql_handler.Insert(tablename, row_str,self.schema_str)
@@ -317,7 +321,7 @@ class Manager:
                 
                 # WAL
                 lock.acquire_writer()
-                self.write_ahead_logging(self.log_files[tablename], tx_id, commit=True)
+                self.write_ahead_logging(log_file, tx_id, WRITE_STR_LOG, commit=True)
                 lock.release_writer()
 
                 return "Data entries added", 200, valid_idx+num_entry
@@ -325,7 +329,7 @@ class Manager:
         except Exception as e:
             return e, 500, -1
         
-    def Update_database(self,request_json):
+    async def Update_database(self,request_json):
        
         try:
             if not self.sql_handler.connected:
@@ -347,25 +351,115 @@ class Manager:
             data = request_json.get("data")
             tablename = request_json.get("shard")
 
-            # Check if the 'Stud_id' in the payload matches the 'Stud_id' in the 'data' object
-            if stud_id == data["Stud_id"]:
-                message, status = self.sql_handler.Update_database(tablename, stud_id,data,'Stud_id')
-            
-                if status==200:
-                    if message == []:
-                        return "No matching entries found",404
-                    return message,200
+            is_primary = False
+            if 'is_primary' in request_json:
+                is_primary = bool(request_json.get("is_primary", False))
 
-                else:                    
-                    return  message,status
+            if is_primary:
+                if 'servers' not in request_json:
+                    return "'servers' field missing in request", 400
+                servers = set(request_json.get("servers"))
+                if not servers:
+                    return "No servers specified", 400
+                # Send the data to all secondary servers
+                majority = int(len(servers) * MAJORITY_CRITERIA)
+                majority+=1
+
+                # WAL
+                lock = self.log_file_locks[tablename]
+                lock.acquire_writer()
+                self.last_tx_ids[tablename] += 1
+                tx_id = self.last_tx_ids[tablename]
+                log_file = self.log_files[tablename]
+                self.write_ahead_logging(log_file, tx_id, UPDATE_STR_LOG, commit=False, data=f"{stud_id}:{data}")
+                lock.release_writer()
+
+                responses = []
+                async with aiohttp.ClientSession() as session:
+                    payload = {
+                        "shard": tablename,
+                        "tx_id": tx_id,
+                        "Stud_id": stud_id,
+                        "data": data
+                    }
+                    tasks = [self.communicate_with_server(session, server, "update", payload) for server in servers]
+                    responses = await asyncio.gather(*tasks)
+
+                success_count = 0
+                failed_servers = []
+                maiority = 1
+                for i in range(len(servers)):
+                    status, response = responses[i]
+                    if status == 200:
+                        success_count += 1
+                    else:
+                        failed_servers.append(servers[i])
+
+                if success_count >= maiority:
+                    # Update the data in the primary server
+                    message, status = self.sql_handler.Update_database(tablename, stud_id,data,'Stud_id')
+                    if status != 200:
+                        return message, status
+                
+                    # WAL
+                    lock.acquire_writer()
+                    self.write_ahead_logging(log_file, tx_id, UPDATE_STR_LOG, commit=True)
+                    lock.release_writer()
+
+                    # Refresh the failed servers
+                    # Use Copy_database to get the data from the primary server
+                    resp, status = self.Copy_database({"shards": [tablename]})
+                    if status != 200:
+                        return f"Failed to copy data from primary server: {status}", 500
+                    full_data = resp[tablename]
+                    payload = {
+                        "shard": tablename,
+                        "data": full_data,
+                        "latest_tx_id": tx_id
+                    }
+                    if len(failed_servers) > 0:
+                        async with aiohttp.ClientSession() as session:
+                            tasks = [self.communicate_with_server(session, server, "refresh", payload) for server in failed_servers]
+                            responses = await asyncio.gather(*tasks)
+                        for i in range(len(failed_servers)):
+                            status, response = responses[i]
+                            if status != 200:
+                                print(f"Failed to refresh server {failed_servers[i]}, ***DATA INCONSISTENCY***", flush=True)
+
+                    return "Data entry updated", 200
+                
+                else:
+                    # return that cannot write to majority of servers
+                    return f"Failed to write to majority of servers: {failed_servers}", 500
+                
             else:
-                return "Stud_id in 'data' does not match Stud_id in payload", 400
+                if 'tx_id' not in request_json:
+                    return "'tx_id' field missing in request", 400
+                tx_id = request_json.get("tx_id")
+                # WAL
+                lock = self.log_file_locks[tablename]
+                lock.acquire_writer()
+                log_file = self.log_files[tablename]
+                self.write_ahead_logging(log_file, tx_id, UPDATE_STR_LOG, commit=False, data=f"{stud_id}:{data}")
+                lock.release_writer()
 
-        except Exception as e:            
-            return e,500
+                message, status = self.sql_handler.Update_database(tablename, stud_id,data,'Stud_id')
+                if status != 200:
+                    return message, status
+                
+                # WAL
+                lock.acquire_writer()
+                self.write_ahead_logging(log_file, tx_id, UPDATE_STR_LOG, commit=True)
+                lock.release_writer()
+
+                return "Data entry updated", 200
+            
+
+        except Exception as e:
+            return e, 500
         
     
-    def Delete_database(self,request_json):
+    async def Delete_database(self,request_json):
         try:
             if not self.sql_handler.connected:
                 message, status = self.sql_handler.connect()
@@ -380,13 +474,110 @@ class Manager:
             
             stud_id = request_json.get("Stud_id")
             tablename = request_json.get("shard")
+            is_primary = False
+            if 'is_primary' in request_json:
+                is_primary = bool(request_json.get("is_primary", False))
 
-            message, status = self.sql_handler.Delete_entry(tablename, stud_id,'Stud_id')
-            
-            return message,status
-        
-        except Exception as e:    
-            return e,500 
+            if is_primary:
+                if 'servers' not in request_json:
+                    return "'servers' field missing in request", 400
+                servers = set(request_json.get("servers"))
+                if not servers:
+                    return "No servers specified", 400
+                # Send the data to all secondary servers
+                majority = int(len(servers) * MAJORITY_CRITERIA)
+                majority+=1
+
+                # WAL
+                lock = self.log_file_locks[tablename]
+                lock.acquire_writer()
+                self.last_tx_ids[tablename] += 1
+                tx_id = self.last_tx_ids[tablename]
+                log_file = self.log_files[tablename]
+                self.write_ahead_logging(log_file, tx_id, DELETE_STR_LOG, commit=False, data=f"{stud_id}")
+                lock.release_writer()
+
+                responses = []
+                async with aiohttp.ClientSession() as session:
+                    payload = {
+                        "shard": tablename,
+                        "tx_id": tx_id,
+                        "Stud_id": stud_id
+                    }
+                    tasks = [self.communicate_with_server(session, server, "del", payload) for server in servers]
+                    responses = await asyncio.gather(*tasks)
+
+                success_count = 0
+                failed_servers = []
+                maiority = 1
+                for i in range(len(servers)):
+                    status, response = responses[i]
+                    if status == 200:
+                        success_count += 1
+                    else:
+                        failed_servers.append(servers[i])
+
+                if success_count >= maiority:
+                    # Delete the data in the primary server
+                    message, status = self.sql_handler.Delete_database(tablename, stud_id,'Stud_id')
+                    if status != 200:
+                        return message, status
+                
+                    # WAL
+                    lock.acquire_writer()
+                    self.write_ahead_logging(log_file, tx_id, DELETE_STR_LOG, commit=True)
+                    lock.release_writer()
+
+                    # Refresh the failed servers
+                    # Use Copy_database to get the data from the primary server
+                    resp, status = self.Copy_database({"shards": [tablename]})
+                    if status != 200:
+                        return f"Failed to copy data from primary server: {status}", 500
+                    full_data = resp[tablename]
+                    payload = {
+                        "shard": tablename,
+                        "data": full_data,
+                        "latest_tx_id": tx_id
+                    }
+                    if len(failed_servers) > 0:
+                        async with aiohttp.ClientSession() as session:
+                            tasks = [self.communicate_with_server(session, server, "refresh", payload) for server in failed_servers]
+                            responses = await asyncio.gather(*tasks)
+                        for i in range(len(failed_servers)):
+                            status, response = responses[i]
+                            if status != 200:
+                                print(f"Failed to refresh server {failed_servers[i]}, ***DATA INCONSISTENCY***", flush=True)
+
+                    return "Data entry deleted", 200
+                
+                else:
+                    # return that cannot write to majority of servers
+                    return f"Failed to write to majority of servers: {failed_servers}", 500
+                
+            else:
+                if 'tx_id' not in request_json:
+                    return "'tx_id' field missing in request", 400
+                tx_id = request_json.get("tx_id")
+                # WAL
+                lock = self.log_file_locks[tablename]
+                lock.acquire_writer()
+                log_file = self.log_files[tablename]
+                self.write_ahead_logging(log_file, tx_id, DELETE_STR_LOG, commit=False, data=f"{stud_id}")
+                lock.release_writer()
+
+                message, status = self.sql_handler.Delete_entry(tablename, stud_id,'Stud_id')
+                if status != 200:
+                    return message, status
+                
+                # WAL
+                lock.acquire_writer()
+                self.write_ahead_logging(log_file, tx_id, DELETE_STR_LOG, commit=True)
+                lock.release_writer()
+
+                return "Data entry deleted", 200
+
+        except Exception as e:
+            return e, 500
     
 
     def Commit(self):
@@ -473,7 +664,7 @@ class Manager:
             lock.acquire_writer()
             self.last_tx_ids[table_name] = latest_tx_id
             log_file = self.log_files[table_name]
-            self.write_ahead_logging(log_file, latest_tx_id, commit=True)
+            self.write_ahead_logging(log_file, latest_tx_id, WRITE_STR_LOG, commit=True)
             lock.release_writer()
 
             return "Table refreshed", 200

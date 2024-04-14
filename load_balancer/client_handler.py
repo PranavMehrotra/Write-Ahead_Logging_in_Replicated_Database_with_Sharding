@@ -245,7 +245,7 @@ def synchronous_communicate_with_db_server(endpoint, payload={}):
     try:
         request_url = f'http://{db_server_hostname}:{SERVER_PORT}/{endpoint}'
         
-        if endpoint == "init_servers_hb" or endpoint == "stop_servers_hb":
+        if endpoint == "config_change" or endpoint == "get_primary_server":
             response = requests.post(request_url, json=payload)
             return response.status_code, response.json()
         
@@ -376,7 +376,7 @@ async def add_server_handler(request):
         # Acquire the writer lock for the shardT
         shardT_lock.acquire_writer()
         for shard in new_shards:
-            shardT[shard[0]] = shard[1:] + [0]
+            shardT[shard[0]] = shard[1:]
             # Insert the (Stud_id_low, Stud_id_low + Shard_size) tuple in the stud_id_low list, maintaining the sorted order
             bisect.insort(stud_id_low, (shard[0], shard[0]+shard[2]))
         shardT_lock.release_writer()
@@ -408,12 +408,16 @@ async def add_server_handler(request):
     #     hb_threads[server] = t1
     #     t1.start()
     
+    # Trim serv_to_shard to only include the added servers
+    serv_to_shard = {server: serv_to_shard[server] for server in added_servers}
+
     # send message to db_server to start the heartbeat thread for the added servers
     payload = {
         "num_servers": num_added,
-        "servers": added_servers
+        "servers_to_shard": serv_to_shard,
+        "action": "add_server",
     }
-    status, response = synchronous_communicate_with_db_server("init_servers_hb", payload)
+    status, response = synchronous_communicate_with_db_server("config_change", payload)
     if status!=200:
         print(f"client_handler: Failed to start heartbeat threads for the added servers")
         print(f"client_handler: {response.get('message', 'Unknown Error')}", flush=True)
@@ -515,9 +519,10 @@ async def remove_server_handler(request):
     # send message to db_server to stop the heartbeat thread for the removed servers
     payload = {
         "num_servers": num_removed,
-        "servers": removed_servers
+        "servers": removed_servers,
+        "action": "remove_server",
     }
-    status, response = synchronous_communicate_with_db_server("stop_servers_hb", payload)
+    status, response = synchronous_communicate_with_db_server("config_change", payload)
     if status!=200:
         print(f"client_handler: Failed to stop heartbeat threads for the removed servers")
         print(f"client_handler: {response.get('message', 'Unknown Error')}", flush=True)
@@ -976,112 +981,142 @@ async def update_data_handler(request):
 
         temp_lock=lb.consistent_hashing[shard_id].lock
     
-        # servers to which the update request will be sent corresponding to the shard_id
-        # temp_lock.acquire_reader()
-        servers = lb.list_shard_servers(shard_id)
-        # temp_lock.release_reader()
+        # Get primary server from db_server
+        payload = {
+            "shard": shard_id
+        }
+        status, response = synchronous_communicate_with_db_server("get_primary_server", payload)
+        if status!=200:
+            print(f"client_handler: Failed to get primary server for shard: {shard_id}")
+            print(f"client_handler: Error: {response.get('message', 'Unknown Error')}", flush=True)
+            return 500, {"message": f"Internal Server Error: The requested data could not be written"}
         
-        # if no servers are available for the shard, return a failure response
-        if len(servers)==0:
-            print(f"client_handler: No active servers for shard: {shard_id}", flush=True)
-            return web.json_response(default_response_json, status=500)
+        primary_server = response.get("primary_server", "")
+        if primary_server=="":
+            print(f"client_handler: No primary server found for shard: {shard_id}")
+            return 500, {"message": f"Internal Server Error: The requested data could not be written"}
         
-        servers_updated = []
+        secondary_servers = response.get("secondary_servers", [])
+        print(f"client_handler: Shard_ID: {shard_id}, Primary Server: {primary_server}, Secondary Servers: {secondary_servers}")
+
+        # # servers to which the update request will be sent corresponding to the shard_id
+        # # temp_lock.acquire_reader()
+        # servers = lb.list_shard_servers(shard_id)
+        # # temp_lock.release_reader()
+        
+        # # if no servers are available for the shard, return a failure response
+        # if len(servers)==0:
+        #     print(f"client_handler: No active servers for shard: {shard_id}", flush=True)
+        #     return web.json_response(default_response_json, status=500)
+        
+        # servers_updated = []
         
         server_json = {
             "shard": shard_id,
             "Stud_id": stud_id,
-            "data": request_json.get("data", {})
+            "data": dict(request_json.get("data", {})),
+            "is_primary": True,
+            "servers": secondary_servers
         }
         
-        error_msg = ""
-        error_flag = False
-        rollback = False
+        # error_msg = ""
+        # error_flag = False
+        # rollback = False
+
+
         
         temp_lock.acquire_writer()
+        # update the entry on the primary server
+        status, response = synchronous_communicate_with_server(primary_server, "update", server_json)
+        if status!=200:
+            temp_lock.release_writer()
+            print(f"client_handler: Failed to update data on primary server: {primary_server}")
+            print(f"client_handler: Error: {response.get('message', 'Unknown Error')}", flush=True)
+            return 500, {"message": f"Internal Server Error: The requested Stud_id could not be updated"}
+
         # update the entry one by one on all the servers which have a replica of the shard
-        for server in servers:
-            # update the entry on the servers one by one
-            status, response = synchronous_communicate_with_server(server, "update", server_json)
-            if status==200:
-                servers_updated.append(server)
-            else: # if the update request failed on a server
-                if status!=500:
-                    error_msg = response.get("message", "Unknown Error")
-                    error_flag = True
-                rollback = True # set the rollback flag to True to rollback the update operation on all the servers
-                break
+        # for server in servers:
+        #     # update the entry on the servers one by one
+        #     status, response = synchronous_communicate_with_server(server, "update", server_json)
+        #     if status==200:
+        #         servers_updated.append(server)
+        #     else: # if the update request failed on a server
+        #         if status!=500:
+        #             error_msg = response.get("message", "Unknown Error")
+        #             error_flag = True
+        #         rollback = True # set the rollback flag to True to rollback the update operation on all the servers
+        #         break
 
         
-        if rollback:
-            # rollback the update operation on the servers
-            for server in servers_updated:
-                retry_cntr = COMMIT_ROLLBACK_RETRY_CNT # retry counter for commit/rollback operations on the servers
-                while retry_cntr > 0:
-                    status, response = synchronous_communicate_with_server(server, "rollback")
-                    if status==200:
-                        break
-                    retry_cntr -= 1
+        # if rollback:
+        #     # rollback the update operation on the servers
+        #     for server in servers_updated:
+        #         retry_cntr = COMMIT_ROLLBACK_RETRY_CNT # retry counter for commit/rollback operations on the servers
+        #         while retry_cntr > 0:
+        #             status, response = synchronous_communicate_with_server(server, "rollback")
+        #             if status==200:
+        #                 break
+        #             retry_cntr -= 1
                 
-                if retry_cntr == 0: # if the rollback operation failed on a server
-                    temp_lock.release_writer()
-                    print(f"client_handler: Rollback failed on server: {server}", flush=True)
-                    print(f"client_handler: Data inconsistency: The requested update created an inconsistency in the database", flush=True)
+        #         if retry_cntr == 0: # if the rollback operation failed on a server
+        #             temp_lock.release_writer()
+        #             print(f"client_handler: Rollback failed on server: {server}", flush=True)
+        #             print(f"client_handler: Data inconsistency: The requested update created an inconsistency in the database", flush=True)
                     
-                    ## TO-DO: Need to handle this case of how to make all shard copies consistent in case of a rollback failure
-                    ## FOR NOW: Just return a failure response explicitly stating data inconsistency
-                    response_json = {
-                        "message": f"<Error> Data inconsistency: The requested update created an inconsistency in the database",
-                        "status": "failure"
-                    }
+        #             ## TO-DO: Need to handle this case of how to make all shard copies consistent in case of a rollback failure
+        #             ## FOR NOW: Just return a failure response explicitly stating data inconsistency
+        #             response_json = {
+        #                 "message": f"<Error> Data inconsistency: The requested update created an inconsistency in the database",
+        #                 "status": "failure"
+        #             }
 
-                    return web.json_response(response_json, status=500)
+        #             return web.json_response(response_json, status=500)
              
-            temp_lock.release_writer()
-            if error_flag: # it means some other error than an exception occurred while updating the servers
-                response_json = {
-                    "message": f"<Error> {error_msg}",
-                    "status": "failure"
-                }
+        #     temp_lock.release_writer()
+        #     if error_flag: # it means some other error than an exception occurred while updating the servers
+        #         response_json = {
+        #             "message": f"<Error> {error_msg}",
+        #             "status": "failure"
+        #         }
                 
-                return web.json_response(response_json, status=400)
+        #         return web.json_response(response_json, status=400)
                     
-            else:   
-                return web.json_response(default_response_json, status=500)
+        #     else:   
+        #         return web.json_response(default_response_json, status=500)
             
-        # commit the update operation on all the servers if the update was successful on all the servers
-        else:
+        # # commit the update operation on all the servers if the update was successful on all the servers
+        # else:
             
-            # assert (servers_updated == servers) # as all servers should have been updated
-            for server in servers_updated:
-                retry_cntr = COMMIT_ROLLBACK_RETRY_CNT
-                while retry_cntr > 0:
-                    status, response = synchronous_communicate_with_server(server, "commit")
-                    if status==200:
-                        break
-                    retry_cntr -= 1
+        #     # assert (servers_updated == servers) # as all servers should have been updated
+        #     for server in servers_updated:
+        #         retry_cntr = COMMIT_ROLLBACK_RETRY_CNT
+        #         while retry_cntr > 0:
+        #             status, response = synchronous_communicate_with_server(server, "commit")
+        #             if status==200:
+        #                 break
+        #             retry_cntr -= 1
                 
-                if retry_cntr == 0: # if the commit operation failed on a server
-                    temp_lock.release_writer()
-                    print(f"client_handler: Commit failed on server: {server}", flush=True)
-                    print(f"client_handler: Data inconsistency: The requested update created an inconsistency in the database", flush=True)
+        #         if retry_cntr == 0: # if the commit operation failed on a server
+        #             temp_lock.release_writer()
+        #             print(f"client_handler: Commit failed on server: {server}", flush=True)
+        #             print(f"client_handler: Data inconsistency: The requested update created an inconsistency in the database", flush=True)
                     
-                    ## TO-DO: Need to handle this case of how to make all shard copies consistent in case of a commit failure
-                    ## FOR NOW: Just return a failure response explicitly stating data inconsistency
-                    response_json = {
-                        "message": f"<Error> Data inconsistency: The requested update created an inconsistency in the database",
-                        "status": "failure"
-                    }
+        #             ## TO-DO: Need to handle this case of how to make all shard copies consistent in case of a commit failure
+        #             ## FOR NOW: Just return a failure response explicitly stating data inconsistency
+        #             response_json = {
+        #                 "message": f"<Error> Data inconsistency: The requested update created an inconsistency in the database",
+        #                 "status": "failure"
+        #             }
                     
-                    return web.json_response(response_json, status=500)
+        #             return web.json_response(response_json, status=500)
                 
-            temp_lock.release_writer()
-            print(f"client_handler: Data entry with Stud_id:{stud_id} updated in all replicas", flush=True)
-            response_json = {
-                "message": f"Data entry with Stud_id:{stud_id} updated in the database",
-                "status": "success"
-            }
-            return web.json_response(response_json, status=200)
+        temp_lock.release_writer()
+        print(f"client_handler: Data entry with Stud_id:{stud_id} updated in all replicas", flush=True)
+        response_json = {
+            "message": f"Data entry with Stud_id:{stud_id} updated in the database",
+            "status": "success"
+        }
+        return web.json_response(response_json, status=200)
         
     except Exception as e:
         ## Not Safe to release the lock here, as the lock might not have been acquired by this function
@@ -1130,99 +1165,128 @@ async def del_data_handler(request):
         
         temp_lock=lb.consistent_hashing[shard_id].lock
 
-        # temp_lock.acquire_reader()
-        servers = lb.list_shard_servers(shard_id)
-        # temp_lock.release_reader()
+        # Get primary server from db_server
+        payload = {
+            "shard": shard_id
+        }
+        status, response = synchronous_communicate_with_db_server("get_primary_server", payload)
+        if status!=200:
+            print(f"client_handler: Failed to get primary server for shard: {shard_id}")
+            print(f"client_handler: Error: {response.get('message', 'Unknown Error')}", flush=True)
+            return 500, {"message": f"Internal Server Error: The requested data could not be written"}
         
-        # if no servers are available for the shard, return a failure response
-        if len(servers)==0:
-            print(f"client_handler: No active servers for shard: {shard_id}", flush=True)
-            return web.json_response(default_response_json, status=500)
+        primary_server = response.get("primary_server", "")
+        if primary_server=="":
+            print(f"client_handler: No primary server found for shard: {shard_id}")
+            return 500, {"message": f"Internal Server Error: The requested data could not be written"}
         
-        servers_updated = []
+        secondary_servers = response.get("secondary_servers", [])
+        print(f"client_handler: Shard_ID: {shard_id}, Primary Server: {primary_server}, Secondary Servers: {secondary_servers}")
+
+        # # temp_lock.acquire_reader()
+        # servers = lb.list_shard_servers(shard_id)
+        # # temp_lock.release_reader()
+        
+        # # if no servers are available for the shard, return a failure response
+        # if len(servers)==0:
+        #     print(f"client_handler: No active servers for shard: {shard_id}", flush=True)
+        #     return web.json_response(default_response_json, status=500)
+        
+        # servers_updated = []
         
         server_json = {
             "shard": shard_id,
-            "Stud_id": stud_id
+            "Stud_id": stud_id,
+            "is_primary": True,
+            "servers": secondary_servers
         }
         
-        error_msg = ""
-        error_flag = False
-        rollback = False
+        # error_msg = ""
+        # error_flag = False
+        # rollback = False
 
         temp_lock.acquire_writer()
-        for server in servers:            
-            # delete the entry from the servers one by one
-            status, response = synchronous_communicate_with_server(server, "del", server_json)
-            if status==200:
-                servers_updated.append(server)
-            else:
-                if status!=500: # if the delete request failed on a server, set the error flag and rollback flag
-                    error_msg = response.get("message", "Unknown Error")
-                    error_flag = True
-                rollback = True # set the rollback flag to True to rollback the delete operation on all the servers
-                break
+        # delete the entry on the primary server
+        status, response = synchronous_communicate_with_server(primary_server, "del", server_json)
+        if status!=200:
+            temp_lock.release_writer()
+            print(f"client_handler: Failed to delete data on primary server: {primary_server}")
+            print(f"client_handler: Error: {response.get('message', 'Unknown Error')}", flush=True)
+            return 500, {"message": f"Internal Server Error: The requested Stud_id could not be deleted"}
+        
+
+        # for server in servers:            
+        #     # delete the entry from the servers one by one
+        #     status, response = synchronous_communicate_with_server(server, "del", server_json)
+        #     if status==200:
+        #         servers_updated.append(server)
+        #     else:
+        #         if status!=500: # if the delete request failed on a server, set the error flag and rollback flag
+        #             error_msg = response.get("message", "Unknown Error")
+        #             error_flag = True
+        #         rollback = True # set the rollback flag to True to rollback the delete operation on all the servers
+        #         break
           
         
-        if rollback:
-            # rollback the delete operation on the servers
-            for server in servers_updated:
-                retry_cntr = COMMIT_ROLLBACK_RETRY_CNT
-                while retry_cntr > 0:
-                    status, response = synchronous_communicate_with_server(server, "rollback")
-                    if status==200:
-                        break
-                    retry_cntr -= 1
+        # if rollback:
+        #     # rollback the delete operation on the servers
+        #     for server in servers_updated:
+        #         retry_cntr = COMMIT_ROLLBACK_RETRY_CNT
+        #         while retry_cntr > 0:
+        #             status, response = synchronous_communicate_with_server(server, "rollback")
+        #             if status==200:
+        #                 break
+        #             retry_cntr -= 1
                 
-                if retry_cntr == 0: # if the rollback operation failed on a server
-                    temp_lock.release_writer()
-                    print(f"client_handler: Rollback failed on server: {server}", flush=True)
-                    print(f"client_handler: Data inconsistency: The requested update created an inconsistency in the database", flush=True)
+        #         if retry_cntr == 0: # if the rollback operation failed on a server
+        #             temp_lock.release_writer()
+        #             print(f"client_handler: Rollback failed on server: {server}", flush=True)
+        #             print(f"client_handler: Data inconsistency: The requested update created an inconsistency in the database", flush=True)
                     
-                    ## TO-DO: Need to handle this case of how to make all shard copies consistent in case of a rollback failure
-                    ## FOR NOW: Just return a failure response explicitly stating data inconsistency
-                    response_json = {
-                        "message": f"<Error> Data inconsistency: The requested deletion created an inconsistency in the database",
-                        "status": "failure"
-                    }
-                    return web.json_response(response_json, status=500)
+        #             ## TO-DO: Need to handle this case of how to make all shard copies consistent in case of a rollback failure
+        #             ## FOR NOW: Just return a failure response explicitly stating data inconsistency
+        #             response_json = {
+        #                 "message": f"<Error> Data inconsistency: The requested deletion created an inconsistency in the database",
+        #                 "status": "failure"
+        #             }
+        #             return web.json_response(response_json, status=500)
             
-            temp_lock.release_writer()
-            if error_flag: # it means some other error than an exception occurred while deleting the entry from the servers
-                response_json = {
-                    "message": f"<Error> {error_msg}",
-                    "status": "failure"
-                }
-                return web.json_response(response_json, status=400)
+        #     temp_lock.release_writer()
+        #     if error_flag: # it means some other error than an exception occurred while deleting the entry from the servers
+        #         response_json = {
+        #             "message": f"<Error> {error_msg}",
+        #             "status": "failure"
+        #         }
+        #         return web.json_response(response_json, status=400)
                     
-            else:
-                return web.json_response(default_response_json, status=500)  
+        #     else:
+        #         return web.json_response(default_response_json, status=500)  
       
       
-        # commit the delete operation on all the servers if the delete was successful on all the servers
-        else:
+        # # commit the delete operation on all the servers if the delete was successful on all the servers
+        # else:
  
-            # assert (servers_updated == servers) # as all servers should be updated
-            for server in servers_updated:
-                retry_cntr = COMMIT_ROLLBACK_RETRY_CNT
-                while retry_cntr > 0:
-                    status, response = synchronous_communicate_with_server(server, "commit")
-                    if status==200:
-                        break
-                    retry_cntr -= 1 
+        #     # assert (servers_updated == servers) # as all servers should be updated
+        #     for server in servers_updated:
+        #         retry_cntr = COMMIT_ROLLBACK_RETRY_CNT
+        #         while retry_cntr > 0:
+        #             status, response = synchronous_communicate_with_server(server, "commit")
+        #             if status==200:
+        #                 break
+        #             retry_cntr -= 1 
 
-                if retry_cntr == 0: # if the commit operation failed on a server
-                    temp_lock.release_writer()
-                    print(f"client_handler: Commit failed on server: {server}", flush=True)
-                    print(f"client_handler: Data inconsistency: The requested update created an inconsistency in the database", flush=True)                   
+        #         if retry_cntr == 0: # if the commit operation failed on a server
+        #             temp_lock.release_writer()
+        #             print(f"client_handler: Commit failed on server: {server}", flush=True)
+        #             print(f"client_handler: Data inconsistency: The requested update created an inconsistency in the database", flush=True)                   
                     
-                    ## TO-DO: Need to handle this case of how to make all shard copies consistent in case of a commit failure
-                    ## FOR NOW: Just return a failure response explicitly stating data inconsistency
-                    response_json = {
-                        "message": f"<Error> Data inconsistency: The requested deletion created an inconsistency in the database",
-                        "status": "failure"
-                    }
-                    return web.json_response(response_json, status=500)
+        #             ## TO-DO: Need to handle this case of how to make all shard copies consistent in case of a commit failure
+        #             ## FOR NOW: Just return a failure response explicitly stating data inconsistency
+        #             response_json = {
+        #                 "message": f"<Error> Data inconsistency: The requested deletion created an inconsistency in the database",
+        #                 "status": "failure"
+        #             }
+        #             return web.json_response(response_json, status=500)
 
             ### VALID-IDX IS NOT NEEDED ANYMORE AS WE ARE FOLLOWING THE WRITE-AHEAD LOGGING PROTOCOL
 
@@ -1231,13 +1295,13 @@ async def del_data_handler(request):
             # shardT[shard_stud_id_low][2] -= 1
             # shardT_lock.release_reader()
 
-            temp_lock.release_writer()
-            print(f"client_handler: Data entry with Stud_id:{stud_id} deleted from all replicas", flush=True)
-            response_json = {
-                "message": f"Data entry with Stud_id:{stud_id} deleted from all replicas",
-                "status": "success"
-            }
-            return web.json_response(response_json, status=200)
+        temp_lock.release_writer()
+        print(f"client_handler: Data entry with Stud_id:{stud_id} deleted from all replicas", flush=True)
+        response_json = {
+            "message": f"Data entry with Stud_id:{stud_id} deleted from all replicas",
+            "status": "success"
+        }
+        return web.json_response(response_json, status=200)
         
     except Exception as e:
         response_json = {
@@ -1396,9 +1460,10 @@ async def init_handler(request):
         # send message to db_server to stop the heartbeat thread for the removed servers
         payload = {
             "num_servers": len(tem_servers),
-            "servers": tem_servers
+            "servers": tem_servers,
+            "action": "remove_server"
         }
-        status, response = synchronous_communicate_with_db_server("stop_servers_hb", payload)
+        status, response = synchronous_communicate_with_db_server("config_change", payload)
         if status!=200:
             print(f"client_handler: Failed to stop heartbeat threads for the removed servers")
             print(f"client_handler: {response.get('message', 'Unknown Error')}", flush=True)
@@ -1471,7 +1536,7 @@ async def init_handler(request):
         # Acquire the writer lock for the shardT
         shardT_lock.acquire_writer()
         for shard in new_shards:
-            shardT[shard[0]] = shard[1:] + [0]
+            shardT[shard[0]] = shard[1:]
         stud_id_low = [(shard[0], shard[0]+shard[2]) for shard in new_shards]
         stud_id_low.sort()
         shardT_lock.release_writer()
@@ -1492,6 +1557,10 @@ async def init_handler(request):
     # Populate the StudT_schema
     StudT_schema = studt_schema
     
+    # Trim serv_to_shard to only include the added servers
+    serv_to_shard = {server: serv_to_shard[server] for server in added_servers}
+
+
     # # Spawn the heartbeat threads for the added servers
     # for server in added_servers:
     #     t1 = HeartBeat(server, StudT_schema)
@@ -1501,9 +1570,10 @@ async def init_handler(request):
     # send message to db_server to start the heartbeat thread for the added servers
     payload = {
         "num_servers": num_added,
-        "servers": added_servers
+        "servers_to_shard": serv_to_shard,
+        "action": "add_server"
     }
-    status, response = synchronous_communicate_with_db_server("init_servers_hb", payload)
+    status, response = synchronous_communicate_with_db_server("config_change", payload)
     if status!=200:
         print(f"client_handler: Failed to start heartbeat threads for the added servers")
         print(f"client_handler: {response.get('message', 'Unknown Error')}", flush=True)
@@ -1566,6 +1636,22 @@ async def status_handler(request):
     global init_done
     servers, serv_to_shard = lb.list_servers(send_shard_info=True)
     shards = [dict(zip(ShardT_schema["columns"], [shard] + shardT[shard])) for shard in shardT.keys()]
+    for shard in shards:
+        # Get primary server from db_server
+        payload = {
+            "shard": shard["Shard_id"]
+        }
+        status, response = synchronous_communicate_with_db_server("get_primary_server", payload)
+        if status!=200:
+            print(f"client_handler: Failed to get primary server for shard: {shard['Shard_id']}")
+            print(f"client_handler: Error: {response.get('message', 'Unknown Error')}", flush=True)
+            return 500, {"message": f"Internal Server Error: The requested data could not be written"}
+        primary_server = response.get("primary_server", "")
+        if primary_server=="":
+            print(f"client_handler: No primary server found for shard: {shard['Shard_id']}")
+            return 500, {"message": f"Internal Server Error: The requested data could not be written"}
+        
+        shard["primary_server"] = primary_server
     response_json = {
         "message": {
             "N": len(servers),
@@ -1622,6 +1708,10 @@ def recover_from_db_server():
                     return False
                 print(f"client_handler: Added {num_added} servers to the system")
                 
+                # Trim serv_to_shard to only include the added servers
+                serv_to_shard = {server: serv_to_shard[server] for server in added_servers}
+
+
                 # # Spawn the heartbeat threads for the added servers
                 # for server in added_servers:
                 #     t1 = HeartBeat(server, StudT_schema)
@@ -1631,9 +1721,10 @@ def recover_from_db_server():
                 # send message to db_server to start the heartbeat thread for the added servers
                 payload = {
                     "num_servers": num_added,
-                    "servers": added_servers
+                    "servers_to_shard": serv_to_shard,
+                    "action": "add_server"
                 }
-                status, response = synchronous_communicate_with_db_server("init_servers_hb", payload)
+                status, response = synchronous_communicate_with_db_server("config_change", payload)
                 if status!=200:
                     print(f"client_handler: Failed to start heartbeat threads for the added servers")
                     print(f"client_handler: {response.get('message', 'Unknown Error')}", flush=True)

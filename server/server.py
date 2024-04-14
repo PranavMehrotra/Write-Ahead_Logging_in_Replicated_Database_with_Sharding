@@ -154,7 +154,7 @@ async def update(request):
         print("Update endpoint called")
         # Get the JSON data from the request
         request_json = await request.json()  
-        message, status = mgr.Update_database(request_json)
+        message, status = await mgr.Update_database(request_json)
     
         response_data = {}
         # Create a response JSON
@@ -186,7 +186,7 @@ async def del_database(request):
         # Get the JSON data from the request
         request_json = await request.json()  
 
-        message, status = mgr.Delete_database(request_json)
+        message, status = await mgr.Delete_database(request_json)
 
         response_data = {}
         # Create a response JSON

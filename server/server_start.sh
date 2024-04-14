@@ -15,8 +15,6 @@ until mysql -u root -e "SHOW DATABASES; ALTER USER 'root'@'localhost' IDENTIFIED
     fi
 done
 
-mkdir ~/logs
-chmod 777 ~/logs
 
 exec python3 server.py
 # python3 test.py

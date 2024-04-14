@@ -69,7 +69,7 @@ class Manager:
                     if status != 200:
                         return message, status
                     # Create log file for write ahead logging
-                    log_file = open(f'~/logs/{shard}_wal.log', 'a', buffering=1)
+                    log_file = open(f'{shard}_wal.log', 'a', buffering=1)
                     self.log_files[shard] = log_file
                     self.last_tx_ids[shard] = 0
                     self.log_file_locks[shard] = RWLock()
@@ -154,13 +154,13 @@ class Manager:
             return e,500
         
     
-    def write_ahead_logging(self, log_file: TextIO, tx_id, type:str, commit = True, data = None):
+    def write_ahead_logging(self, log_file: TextIO, tablename, tx_id, type:str, commit = True, data = None):
         if commit:
-            log_file.write(f"0_{tx_id}_{type}\n")
-            print(f"log_file: 0_{tx_id}_{type}\n", flush=True)
+            log_file.write(f"COMMIT,Tx_ID:{tx_id},Type:{type}\n")
+            print(f"log_file: {tablename} -> COMMIT,Tx_ID:{tx_id},Type:{type}\n", flush=True)
         else:
-            log_file.write(f"1_{tx_id}_{type}_{data}\n")
-            print(f"log_file: 1_{tx_id}_{type}_{data}\n", flush=True)
+            log_file.write(f"REQUEST,Tx_ID:{tx_id},Type:{type},Data:{data}\n")
+            print(f"log_file: {tablename} -> REQUEST,Tx_ID:{tx_id},Type:{type},Data:{data}\n", flush=True)
 
 
     async def Write_database(self,request_json):
@@ -245,7 +245,7 @@ class Manager:
                 self.last_tx_ids[tablename] += 1
                 tx_id = self.last_tx_ids[tablename]
                 log_file = self.log_files[tablename]
-                self.write_ahead_logging(log_file, tx_id, WRITE_STR_LOG, commit=False, data=f"[{row_str}]")
+                self.write_ahead_logging(log_file, tablename, tx_id, WRITE_STR_LOG, commit=False, data=f"[{row_str}]")
                 lock.release_writer()
 
                 responses = []
@@ -255,7 +255,7 @@ class Manager:
                         "tx_id": tx_id,
                         "data": data
                     }
-                    tasks = [self.communicate_with_server(session, server, "write", payload) for server in servers]
+                    tasks = [communicate_with_server(session, server, "write", payload) for server in servers]
                     responses = await asyncio.gather(*tasks)
 
                 success_count = 0
@@ -276,7 +276,7 @@ class Manager:
                         return message, status,valid_idx
                     # WAL
                     lock.acquire_writer()
-                    self.write_ahead_logging(log_file, tx_id, WRITE_STR_LOG, commit=True)
+                    self.write_ahead_logging(log_file, tablename, tx_id, WRITE_STR_LOG, commit=True)
                     lock.release_writer()
 
                     # Refresh the failed servers
@@ -292,7 +292,7 @@ class Manager:
                     }
                     if len(failed_servers) > 0:
                         async with aiohttp.ClientSession() as session:
-                            tasks = [self.communicate_with_server(session, server, "refresh", payload) for server in failed_servers]
+                            tasks = [communicate_with_server(session, server, "refresh", payload) for server in failed_servers]
                             responses = await asyncio.gather(*tasks)
                         for i in range(len(failed_servers)):
                             status, response = responses[i]
@@ -312,7 +312,7 @@ class Manager:
                 lock = self.log_file_locks[tablename]
                 lock.acquire_writer()
                 log_file = self.log_files[tablename]
-                self.write_ahead_logging(log_file, tx_id, WRITE_STR_LOG, commit=False, data=f"[{row_str}]")
+                self.write_ahead_logging(log_file, tablename, tx_id, WRITE_STR_LOG, commit=False, data=f"[{row_str}]")
                 lock.release_writer()
 
                 message, status = self.sql_handler.Insert(tablename, row_str,self.schema_str)
@@ -321,7 +321,7 @@ class Manager:
                 
                 # WAL
                 lock.acquire_writer()
-                self.write_ahead_logging(log_file, tx_id, WRITE_STR_LOG, commit=True)
+                self.write_ahead_logging(log_file, tablename, tx_id, WRITE_STR_LOG, commit=True)
                 lock.release_writer()
 
                 return "Data entries added", 200, valid_idx+num_entry
@@ -371,7 +371,7 @@ class Manager:
                 self.last_tx_ids[tablename] += 1
                 tx_id = self.last_tx_ids[tablename]
                 log_file = self.log_files[tablename]
-                self.write_ahead_logging(log_file, tx_id, UPDATE_STR_LOG, commit=False, data=f"{stud_id}:{data}")
+                self.write_ahead_logging(log_file, tablename, tx_id, UPDATE_STR_LOG, commit=False, data=f"{stud_id}:{data}")
                 lock.release_writer()
 
                 responses = []
@@ -382,7 +382,7 @@ class Manager:
                         "Stud_id": stud_id,
                         "data": data
                     }
-                    tasks = [self.communicate_with_server(session, server, "update", payload) for server in servers]
+                    tasks = [communicate_with_server(session, server, "update", payload) for server in servers]
                     responses = await asyncio.gather(*tasks)
 
                 success_count = 0
@@ -403,7 +403,7 @@ class Manager:
                 
                     # WAL
                     lock.acquire_writer()
-                    self.write_ahead_logging(log_file, tx_id, UPDATE_STR_LOG, commit=True)
+                    self.write_ahead_logging(log_file, tablename, tx_id, UPDATE_STR_LOG, commit=True)
                     lock.release_writer()
 
                     # Refresh the failed servers
@@ -419,7 +419,7 @@ class Manager:
                     }
                     if len(failed_servers) > 0:
                         async with aiohttp.ClientSession() as session:
-                            tasks = [self.communicate_with_server(session, server, "refresh", payload) for server in failed_servers]
+                            tasks = [communicate_with_server(session, server, "refresh", payload) for server in failed_servers]
                             responses = await asyncio.gather(*tasks)
                         for i in range(len(failed_servers)):
                             status, response = responses[i]
@@ -440,7 +440,7 @@ class Manager:
                 lock = self.log_file_locks[tablename]
                 lock.acquire_writer()
                 log_file = self.log_files[tablename]
-                self.write_ahead_logging(log_file, tx_id, UPDATE_STR_LOG, commit=False, data=f"{stud_id}:{data}")
+                self.write_ahead_logging(log_file, tablename, tx_id, UPDATE_STR_LOG, commit=False, data=f"{stud_id}:{data}")
                 lock.release_writer()
 
                 message, status = self.sql_handler.Update_database(tablename, stud_id,data,'Stud_id')
@@ -449,7 +449,7 @@ class Manager:
                 
                 # WAL
                 lock.acquire_writer()
-                self.write_ahead_logging(log_file, tx_id, UPDATE_STR_LOG, commit=True)
+                self.write_ahead_logging(log_file, tablename, tx_id, UPDATE_STR_LOG, commit=True)
                 lock.release_writer()
 
                 return "Data entry updated", 200
@@ -494,7 +494,7 @@ class Manager:
                 self.last_tx_ids[tablename] += 1
                 tx_id = self.last_tx_ids[tablename]
                 log_file = self.log_files[tablename]
-                self.write_ahead_logging(log_file, tx_id, DELETE_STR_LOG, commit=False, data=f"{stud_id}")
+                self.write_ahead_logging(log_file, tablename, tx_id, DELETE_STR_LOG, commit=False, data=f"{stud_id}")
                 lock.release_writer()
 
                 responses = []
@@ -504,7 +504,7 @@ class Manager:
                         "tx_id": tx_id,
                         "Stud_id": stud_id
                     }
-                    tasks = [self.communicate_with_server(session, server, "del", payload) for server in servers]
+                    tasks = [communicate_with_server(session, server, "del", payload) for server in servers]
                     responses = await asyncio.gather(*tasks)
 
                 success_count = 0
@@ -519,13 +519,13 @@ class Manager:
 
                 if success_count >= maiority:
                     # Delete the data in the primary server
-                    message, status = self.sql_handler.Delete_database(tablename, stud_id,'Stud_id')
+                    message, status = self.sql_handler.Delete_entry(tablename, stud_id,'Stud_id')
                     if status != 200:
                         return message, status
                 
                     # WAL
                     lock.acquire_writer()
-                    self.write_ahead_logging(log_file, tx_id, DELETE_STR_LOG, commit=True)
+                    self.write_ahead_logging(log_file, tablename, tx_id, DELETE_STR_LOG, commit=True)
                     lock.release_writer()
 
                     # Refresh the failed servers
@@ -541,7 +541,7 @@ class Manager:
                     }
                     if len(failed_servers) > 0:
                         async with aiohttp.ClientSession() as session:
-                            tasks = [self.communicate_with_server(session, server, "refresh", payload) for server in failed_servers]
+                            tasks = [communicate_with_server(session, server, "refresh", payload) for server in failed_servers]
                             responses = await asyncio.gather(*tasks)
                         for i in range(len(failed_servers)):
                             status, response = responses[i]
@@ -562,7 +562,7 @@ class Manager:
                 lock = self.log_file_locks[tablename]
                 lock.acquire_writer()
                 log_file = self.log_files[tablename]
-                self.write_ahead_logging(log_file, tx_id, DELETE_STR_LOG, commit=False, data=f"{stud_id}")
+                self.write_ahead_logging(log_file, tablename, tx_id, DELETE_STR_LOG, commit=False, data=f"{stud_id}")
                 lock.release_writer()
 
                 message, status = self.sql_handler.Delete_entry(tablename, stud_id,'Stud_id')
@@ -571,7 +571,7 @@ class Manager:
                 
                 # WAL
                 lock.acquire_writer()
-                self.write_ahead_logging(log_file, tx_id, DELETE_STR_LOG, commit=True)
+                self.write_ahead_logging(log_file, tablename, tx_id, DELETE_STR_LOG, commit=True)
                 lock.release_writer()
 
                 return "Data entry deleted", 200
@@ -618,7 +618,7 @@ class Manager:
             if 'latest_tx_id' not in request_json:
                 return "'latest_tx_id' field missing in request", 400
 
-            table_name = request_json.get("shard")
+            tablename = request_json.get("shard")
             data = request_json.get("data")
             latest_tx_id = int(request_json.get("latest_tx_id"))
 
@@ -627,7 +627,7 @@ class Manager:
                 if status != 200:
                     return message, status
 
-            message, status = self.sql_handler.Clear_table(table_name)
+            message, status = self.sql_handler.Clear_table(tablename)
             if status != 200:
                 return message, status
             valid_idx = 0
@@ -655,16 +655,16 @@ class Manager:
                 row_str += f"({row}),"
             row_str = row_str[:-1]
 
-            message, status = self.sql_handler.Insert(table_name, row_str, self.schema_str)
+            message, status = self.sql_handler.Insert(tablename, row_str, self.schema_str)
             if status != 200:
                 return message, status, valid_idx
             
             # WAL
-            lock = self.log_file_locks[table_name]
+            lock = self.log_file_locks[tablename]
             lock.acquire_writer()
-            self.last_tx_ids[table_name] = latest_tx_id
-            log_file = self.log_files[table_name]
-            self.write_ahead_logging(log_file, latest_tx_id, WRITE_STR_LOG, commit=True)
+            self.last_tx_ids[tablename] = latest_tx_id
+            log_file = self.log_files[tablename]
+            self.write_ahead_logging(log_file, tablename, latest_tx_id, WRITE_STR_LOG, commit=True)
             lock.release_writer()
 
             return "Table refreshed", 200
@@ -690,34 +690,34 @@ class Manager:
         except Exception as e:
             return e, 500
 
-    async def communicate_with_server(session: aiohttp.ClientSession, server, endpoint, payload={}):
-        try:
-            # async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=1)) as session:
-            request_url = f'http://{server}:{SERVER_PORT}/{endpoint}'
+async def communicate_with_server(session: aiohttp.ClientSession, server, endpoint, payload={}):
+    try:
+        # async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=1)) as session:
+        request_url = f'http://{server}:{SERVER_PORT}/{endpoint}'
+        
+        if endpoint == "copy" or endpoint == "commit" or endpoint == "rollback":
+            async with session.get(request_url, json=payload) as response:
+                return response.status, await response.json()
             
-            if endpoint == "copy" or endpoint == "commit" or endpoint == "rollback":
-                async with session.get(request_url, json=payload) as response:
-                    return response.status, await response.json()
+                # response_status = response.status
+                # if response_status == 200:
+                #     return True, await response.json()
+                # else:
+                #     return False, await response.json()
+        
+        elif endpoint == "read" or endpoint == "write" or endpoint == "config":
+            async with session.post(request_url, json=payload) as response:
+                return response.status, await response.json()
                 
-                    # response_status = response.status
-                    # if response_status == 200:
-                    #     return True, await response.json()
-                    # else:
-                    #     return False, await response.json()
+        elif endpoint == "update":
+            async with session.put(request_url, json=payload) as response:
+                return response.status, await response.json()
+                
+        elif endpoint == "del":
+            async with session.delete(request_url, json=payload) as response:
+                return response.status, await response.json()
+        else:
+            return 500, {"message": "Invalid endpoint"}
             
-            elif endpoint == "read" or endpoint == "write" or endpoint == "config":
-                async with session.post(request_url, json=payload) as response:
-                    return response.status, await response.json()
-                    
-            elif endpoint == "update":
-                async with session.put(request_url, json=payload) as response:
-                    return response.status, await response.json()
-                    
-            elif endpoint == "del":
-                async with session.delete(request_url, json=payload) as response:
-                    return response.status, await response.json()
-            else:
-                return 500, {"message": "Invalid endpoint"}
-                
-        except Exception as e:
-            return 500, {"message": f"{e}"}
+    except Exception as e:
+        return 500, {"message": f"{e}"}

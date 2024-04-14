@@ -699,19 +699,32 @@ async def write_one_shard(shard_id, shard_stud_id_low, data):
     # print(f"client_handler: Write request for shard: {shard_id}, data: {data}")
     temp_lock=lb.consistent_hashing[shard_id].lock
     # temp_lock.acquire_reader()
-    servers = lb.list_shard_servers(shard_id)
+    # servers = lb.list_shard_servers(shard_id)
     # temp_lock.release_reader()
     
-    # if no servers are available for the shard, return a failure response
-    if len(servers)==0:
-        print(f"client_handler: No active servers for shard: {shard_id}", flush=True)
-        return 500, {"message": f"No active servers for shard: {shard_id}"}
+    # Get primary server from db_server
+    payload = {
+        "shard": shard_id
+    }
+    status, response = synchronous_communicate_with_db_server("get_primary_server", payload)
+    if status!=200:
+        print(f"client_handler: Failed to get primary server for shard: {shard_id}")
+        print(f"client_handler: Error: {response.get('message', 'Unknown Error')}", flush=True)
+        return 500, {"message": f"Internal Server Error: The requested data could not be written"}
     
-    servers_updated = []
+    primary_server = response.get("primary_server", "")
+    if primary_server=="":
+        print(f"client_handler: No primary server found for shard: {shard_id}")
+        return 500, {"message": f"Internal Server Error: The requested data could not be written"}
     
-    error_msg = ""
-    error_flag = False
-    rollback = False
+    secondary_servers = response.get("secondary_servers", [])
+    print(f"client_handler: Shard_ID: {shard_id}, Primary Server: {primary_server}, Secondary Servers: {secondary_servers}")
+
+    # servers_updated = []
+    
+    # error_msg = ""
+    # error_flag = False
+    # rollback = False
     temp_lock.acquire_writer()
     
     ### VALID-IDX IS NOT NEEDED ANYMORE AS WE ARE FOLLOWING THE WRITE-AHEAD LOGGING PROTOCOL
@@ -729,81 +742,77 @@ async def write_one_shard(shard_id, shard_stud_id_low, data):
     payload = {
         "shard": shard_id,
         # "curr_idx": valid_idx,
-        "data": data
+        "data": data,
+        "is_primary": True,
+        "servers": secondary_servers
     }
     # print(f"client_handler: Writing data to shard: {shard_id}, data: {data}")
-    for server in servers:
-        # print(f"client_handler: Writing data to server: {server}, payload: {payload}", flush=True)
-        # write the entry on the servers one by one
-        status, response = synchronous_communicate_with_server(server, "write", payload)
-        if status==200:
-            servers_updated.append(server)
-        else:
-            if status!=500:
-                error_msg = response.get("message", "Unknown Error")
-                error_flag = True
-            rollback = True
-            break
-        
-    if rollback:
-        print(f"client_handler: Rollback required for shard: {shard_id}", flush=True)
-        print(f"client_handler: Error: {error_msg}", flush=True)
-        # rollback the write operation on the servers
-        for server in servers_updated:
-            retry_cntr = COMMIT_ROLLBACK_RETRY_CNT
-            while retry_cntr > 0:
-                status, response = synchronous_communicate_with_server(server, "rollback")
-                if status==200:
-                    break
-                retry_cntr -= 1
-            
-            if retry_cntr == 0:
-                temp_lock.release_writer()
-                print(f"client_handler: Rollback failed on server: {server}", flush=True)
-                print(f"client_handler: Data inconsistency: The requested write created an inconsistency in the database", flush=True)
-                
-                ## TO-DO: Need to handle this case of how to make all shard copies consistent in case of a rollback failure
-                ## FOR NOW: Just return a failure response explicitly stating data inconsistency
-                response_json = {
-                    "message": f"<Error> Data inconsistency: The requested write created an inconsistency in the database",
-                    "status": "failure"
-                }
-                return 500, response_json
-        
+    status, response = synchronous_communicate_with_server(primary_server, "write", payload)
+    if status!=200:
+        print(f"client_handler: Failed to write data to primary server: {primary_server}")
+        print(f"client_handler: Error: {response.get('message', 'Unknown Error')}", flush=True)
         temp_lock.release_writer()
-        if error_flag: # it means some other error than an exception occurred while writing the entry to the servers
-            response_json = {
-                "message": f"<Error> {error_msg}",
-                "status": "failure"
-            }
-            return 400, response_json
-                
-        else:
-            return 500, {"message": f"Internal Server Error: The requested data could not be written"}
+        return 500, {"message": f"Internal Server Error: The requested data could not be written"}
         
-    # commit the write operation on all the servers
-    else:
-        # assert (servers_updated == servers)
-        for server in servers_updated:
-            retry_cntr = COMMIT_ROLLBACK_RETRY_CNT
-            while retry_cntr > 0:
-                status, response = synchronous_communicate_with_server(server, "commit")
-                if status==200:
-                    break
-                retry_cntr -= 1
+    # if rollback:
+    #     print(f"client_handler: Rollback required for shard: {shard_id}", flush=True)
+    #     print(f"client_handler: Error: {error_msg}", flush=True)
+    #     # rollback the write operation on the servers
+    #     for server in servers_updated:
+    #         retry_cntr = COMMIT_ROLLBACK_RETRY_CNT
+    #         while retry_cntr > 0:
+    #             status, response = synchronous_communicate_with_server(server, "rollback")
+    #             if status==200:
+    #                 break
+    #             retry_cntr -= 1
             
-            if retry_cntr == 0:
-                temp_lock.release_writer()
-                print(f"client_handler: Commit failed on server: {server}", flush=True)
-                print(f"client_handler: Data inconsistency: The requested write created an inconsistency in the database", flush=True)
+    #         if retry_cntr == 0:
+    #             temp_lock.release_writer()
+    #             print(f"client_handler: Rollback failed on server: {server}", flush=True)
+    #             print(f"client_handler: Data inconsistency: The requested write created an inconsistency in the database", flush=True)
                 
-                ## TO-DO: Need to handle this case of how to make all shard copies consistent in case of a commit failure
-                ## FOR NOW: Just return a failure response explicitly stating data inconsistency
-                response_json = {
-                    "message": f"<Error> Data inconsistency: The requested write created an inconsistency in the database",
-                    "status": "failure"
-                }
-                return 500, response_json
+    #             ## TO-DO: Need to handle this case of how to make all shard copies consistent in case of a rollback failure
+    #             ## FOR NOW: Just return a failure response explicitly stating data inconsistency
+    #             response_json = {
+    #                 "message": f"<Error> Data inconsistency: The requested write created an inconsistency in the database",
+    #                 "status": "failure"
+    #             }
+    #             return 500, response_json
+        
+    #     temp_lock.release_writer()
+    #     if error_flag: # it means some other error than an exception occurred while writing the entry to the servers
+    #         response_json = {
+    #             "message": f"<Error> {error_msg}",
+    #             "status": "failure"
+    #         }
+    #         return 400, response_json
+                
+    #     else:
+    #         return 500, {"message": f"Internal Server Error: The requested data could not be written"}
+        
+    # # commit the write operation on all the servers
+    # else:
+    #     # assert (servers_updated == servers)
+    #     for server in servers_updated:
+    #         retry_cntr = COMMIT_ROLLBACK_RETRY_CNT
+    #         while retry_cntr > 0:
+    #             status, response = synchronous_communicate_with_server(server, "commit")
+    #             if status==200:
+    #                 break
+    #             retry_cntr -= 1
+            
+    #         if retry_cntr == 0:
+    #             temp_lock.release_writer()
+    #             print(f"client_handler: Commit failed on server: {server}", flush=True)
+    #             print(f"client_handler: Data inconsistency: The requested write created an inconsistency in the database", flush=True)
+                
+    #             ## TO-DO: Need to handle this case of how to make all shard copies consistent in case of a commit failure
+    #             ## FOR NOW: Just return a failure response explicitly stating data inconsistency
+    #             response_json = {
+    #                 "message": f"<Error> Data inconsistency: The requested write created an inconsistency in the database",
+    #                 "status": "failure"
+    #             }
+    #             return 500, response_json
         
         
         ### VALID-IDX IS NOT NEEDED ANYMORE AS WE ARE FOLLOWING THE WRITE-AHEAD LOGGING PROTOCOL
@@ -818,8 +827,8 @@ async def write_one_shard(shard_id, shard_stud_id_low, data):
         #     return 500, {"message": f"Internal Server Error: The requested data could not be written"}
         # shardT_lock.release_reader()
         
-        temp_lock.release_writer()
-        return 200, {"message": "success"}
+    temp_lock.release_writer()
+    return 200, {"message": "success"}
 
 
 # function to write a bunch of data entries across all shard replicas

@@ -120,7 +120,7 @@ async def write_database(request):
         print("Write endpoint called")
         # Get the JSON data from the request
         request_json = await request.json()  
-        message, status,id = mgr.Write_database(request_json)
+        message, status,id = await mgr.Write_database(request_json)
         
         response_data = {}
         # Create a response JSON
@@ -270,7 +270,67 @@ async def rollback(request):
         
         print(f"Server: Error in commit endpoint: {str(e)}")
         return web.json_response({"error": "Internal Server Error"}, status=500)
-      
+    
+async def refresh_table(request):
+    try:
+        print("Refresh endpoint called")
+        # Get the JSON data from the request
+        request_json = await request.json()  
+        message, status = mgr.Refresh_table(request_json)
+        
+        response_data = {}
+        # Create a response JSON
+        if status==200:
+            response_data = {
+                "message": message,
+                "status": "success"
+            }
+        else:
+            response_data = {
+                # "error": message,
+                "message": str(message),
+                # "message": f"<Error>: {message}",
+                "status": "failure"
+            }
+        
+        return web.json_response(response_data, status=status)
+    
+    except Exception as e:
+        
+        print(f"Server: Error in refresh endpoint: {str(e)}")
+        return web.json_response({"error": "Internal Server Error"}, status=500)
+
+# Return the latest tx_id of a particular shard
+async def get_latest_tx_id(request):
+    try:
+        print("Get latest tx_id endpoint called")
+        # Get the JSON data from the request
+        request_json = await request.json()  
+        message, status = mgr.latest_tx_id(request_json)
+        
+        response_data = {}
+        # Create a response JSON
+        if status==200:
+            response_data = {
+                "latest_tx_id": message,
+                "status": "success"
+            }
+        else:
+            response_data = {
+                # "error": message,
+                "message": str(message),
+                # "message": f"<Error>: {message}",
+                "status": "failure"
+            }
+        
+        return web.json_response(response_data, status=status)
+    
+    except Exception as e:
+        
+        print(f"Server: Error in get latest tx_id endpoint: {str(e)}")
+        return web.json_response({"error": "Internal Server Error"}, status=500)
+
+
         
 # Catch-all endpoint for any other request
 async def not_found(request):
@@ -292,6 +352,8 @@ def run_server():
     app.router.add_delete('/del', del_database)
     app.router.add_get('/commit', commit)
     app.router.add_get('/rollback', rollback)
+    app.router.add_post('/refresh', refresh_table)
+    app.router.add_post('/latest_tx_id', get_latest_tx_id)
 
 
     # Add a catch-all route for any other endpoint, which returns a 400 Bad Request

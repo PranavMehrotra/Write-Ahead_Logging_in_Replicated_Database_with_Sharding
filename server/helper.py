@@ -55,7 +55,7 @@ class SQLHandler:
             res=cursor.fetchall()
             # print(sql, res)
             cursor.close()
-            # self.mydb.commit()
+            self.mydb.commit()          ## Commit the changes
             return res,200
         except mysql.connector.errors.DataError as e:
             return "DataError: data exception", 400
@@ -172,13 +172,13 @@ class SQLHandler:
             if status != 200:
                 return res, status
             
-            # check if the table is empty
-            res,status = self.query(f"SELECT * FROM {tabname}")
-            if status != 200:
-                return res, status
+            # # check if the table is empty
+            # res,status = self.query(f"SELECT * FROM {tabname}")
+            # if status != 200:
+            #     return res, status
             
-            if len(res) != 0: # Table not cleared
-                return f"Could not fully clear table {tabname}", 500
+            # if len(res) != 0: # Table not cleared
+            #     return f"Could not fully clear table {tabname}", 500
     
             # Table cleared successfully
             return f"Table {tabname} cleared successfully!", 200
@@ -258,7 +258,7 @@ class SQLHandler:
             if status != 200:
                 return res, status
             
-            return f"Successfully inserted {row_str}", 200
+            return f"Successfully inserted", 200
         except Exception as e:
             return e, 500
 

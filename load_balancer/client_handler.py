@@ -1902,7 +1902,41 @@ async def remove_servers_from_lb(request):
             "status": "failure"
         }
         return web.json_response(response_json, status=400)
+
+async def kill_server_handler(request):
+    global lb
+    try:
+        request_json = await request.json()
+        if 'server' not in request_json:
+            response_json = {
+                "message": f"<Error> Invalid payload format: 'server' field missing in request",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
         
+        server = request_json['server']
+        done = kill_server_cntnr(server)
+        if done:
+            response_json = {
+                "message": f"Server {server} killed successfully",
+                "status": "success"
+            }
+            return web.json_response(response_json, status=200)
+        else:
+            response_json = {
+                "message": f"<Error> Failed to kill server {server}",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=500)
+        
+    except Exception as e:
+        print(f"client_handler: <Error> : {str(e)}", flush=True)
+        response_json = {
+            "message": f"<Error>: {str(e)}",
+            "status": "failure"
+        }
+        return web.json_response(response_json, status=400)
+
 
 def run_load_balancer():
     global lb
@@ -1952,6 +1986,7 @@ def run_load_balancer():
     app.router.add_post('/list_servers_lb', list_servers_from_lb)
     app.router.add_post('/add_servers_lb', add_servers_to_lb)
     app.router.add_post('/remove_servers_lb', remove_servers_from_lb)
+    app.router.add_post('/kill_server_cntnr', kill_server_handler)
     # app.router.add_post('/list_shard_servers', list_shard_servers)
 
     app.router.add_route('*', '/{tail:.*}', not_found)

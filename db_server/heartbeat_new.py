@@ -13,7 +13,7 @@ from docker_utils import kill_server_cntnr
 HEARTBEAT_INTERVAL = 0.2
 SEND_FIRST_HEARTBEAT_AFTER = 2
 SERVER_PORT = 5000
-LB_IP_ADDR = '0.0.0.0'
+LB_IP_ADDR = 'load_balancer_con'
 LB_PORT = 5000
 
 def synchronous_communicate_with_server(server, endpoint, payload={}):
@@ -103,12 +103,12 @@ class HeartBeat(threading.Thread):
         self.MapT_dict_lock.acquire_writer()
         for shard_id in server_shards:
             primary_server = self.MapT_dict[shard_id][0]
-            secondary_servers = self.MapT_dict[shard_id][1:]
+            secondary_servers = self.MapT_dict[shard_id][1]
             if primary_server == server_name:
                 new_primary_server = self.elect_primary_server(shard=shard_id, active_servers=secondary_servers)
                 if new_primary_server != "":
                     self.MapT_dict[shard_id][0] = new_primary_server
-                    self.MapT_dict[shard_id][1] = secondary_servers - [new_primary_server]
+                    self.MapT_dict[shard_id][1] = list(set(secondary_servers) - set([new_primary_server]))
                     
                 else:
                     print(f"heartbeat: Error in electing new primary server for shard {shard_id} after server {server_name} was removed")
@@ -116,7 +116,7 @@ class HeartBeat(threading.Thread):
                     # return
                 
             elif server_name in secondary_servers:
-                self.MapT_dict[shard_id][1] = secondary_servers - [server_name]
+                self.MapT_dict[shard_id][1] = list(set(secondary_servers) - set([server_name]))
                 
         self.MapT_dict_lock.release_writer()     
         
@@ -239,6 +239,13 @@ class HeartBeat(threading.Thread):
                         if (status == 200):
                             print(f"heartbeat: Server {server_name} reconfigured successfully with all the data!", flush=True)
                             
+                            # add the server back as a secondary server for the shards in MapT_dict
+                            self.MapT_dict_lock.acquire_writer()
+                            for shard_id in serv_to_shard[server_name]:
+                                self.MapT_dict[shard_id][1].append(server_name)
+                            self.MapT_dict_lock.release_writer()
+                            
+                            
                         else:
                             print(f"heartbeat: Error in reconfiguring server {server_name}\nError: {response}", flush=True)
                             print(f"heartbeat: Killing the server {server_name} permanently!", flush=True)
@@ -351,7 +358,12 @@ class HeartBeat(threading.Thread):
                     status, response = self.config_server(server_name, serv_to_shard)
                     if (status == 200):
                         print(f"heartbeat: Server {server_name} reconfigured successfully with all the data!", flush=True)
-                        
+                        # add the server back as a secondary server for the shards in MapT_dict
+                        self.MapT_dict_lock.acquire_writer()
+                        for shard_id in serv_to_shard[server_name]:
+                            self.MapT_dict[shard_id][1].append(server_name)
+                        self.MapT_dict_lock.release_writer()    
+                                            
                     else:
                         print(f"heartbeat: Error in reconfiguring server {server_name}\nError: {response}")
                         print(f"heartbeat: Killing the server {server_name} permanently!", flush=True)

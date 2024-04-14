@@ -1758,17 +1758,20 @@ async def list_servers_from_lb(request):
     global lb
 
     try:
+        print(f"client_handler: Received Request to list servers", flush=True)
         request_json = await request.json()
         
         # check if the payload has the required fields
-        if 'send_shard_info' not in request_json or request_json['send_shard_info'] not in [True, False]:
+        if 'send_shard_info' not in request_json:
             response_json = {
                 "message": f"<Error> Invalid payload format: 'send_shard_info' field missing or invalid in request",
                 "status": "failure"
             }
             return web.json_response(response_json, status=400)
         
-        send_shard_info = request_json['send_shard_info']
+        send_shard_info = bool(request_json['send_shard_info'])
+        
+        # print(f"client_handler: Sending shard info: {send_shard_info}", flush=True)
         
         if send_shard_info:
             servers, serv_to_shard = lb.list_servers(send_shard_info=True)
@@ -1813,7 +1816,7 @@ async def add_servers_to_lb(request):
             }
             return web.json_response(response_json, status=400)
         
-        num_servers = request_json['num_servers']
+        num_servers = int(request_json['num_servers'])
         serv_to_shard = request_json.get('serv_to_shard', {})
         
         if num_servers != len(list(serv_to_shard.keys())):
@@ -1822,9 +1825,10 @@ async def add_servers_to_lb(request):
                 "status": "failure"
             }
             return web.json_response(response_json, status=400)
-        
+        # print(f"client_handler: Received Request to add N: {num_servers} servers, server to shard mapping: {serv_to_shard}", flush=True)
         num_servers_added, added_servers, err = lb.add_servers(num_servers, serv_to_shard)
-        if num_servers_added == num_servers and err=="":
+        # print(f"client_handler: Added {num_servers_added} servers to the system", flush=True)
+        if num_servers_added == num_servers:
             response_json = {
                 "message": f"Added {num_servers_added} servers to the consistent hashing",
                 "status": "success"
@@ -1832,7 +1836,7 @@ async def add_servers_to_lb(request):
             return web.json_response(response_json, status=200)
         else:
             response_json = {
-                "message": f"<Error> Failed to add servers to the consistent hashing: {err}",
+                "message": f"<Error> Failed to add servers to the consistent hashing: {str(err)}",
                 "status": "failure"
             }
             return web.json_response(response_json, status=400)
@@ -1876,7 +1880,7 @@ async def remove_servers_from_lb(request):
             }
             return web.json_response(response_json, status=400)
         
-        num_servers_removed, removed_servers, err = lb.remove_servers(servers)
+        num_servers_removed, removed_servers, err = lb.remove_servers(len(servers), servers)
         
         if num_servers_removed == num_servers and err=="":
             response_json = {
@@ -1886,7 +1890,7 @@ async def remove_servers_from_lb(request):
             return web.json_response(response_json, status=200)
         else:
             response_json = {
-                "message": f"<Error> Failed to remove servers from the consistent hashing: {err}",
+                "message": f"<Error> Failed to remove servers from the consistent hashing: {str(err)}",
                 "status": "failure"
             }
             return web.json_response(response_json, status=400)
@@ -1898,11 +1902,6 @@ async def remove_servers_from_lb(request):
             "status": "failure"
         }
         return web.json_response(response_json, status=400)
-    
-async def list_shard_servers(request):
-    
-    
-    pass
         
 
 def run_load_balancer():
@@ -1953,7 +1952,7 @@ def run_load_balancer():
     app.router.add_post('/list_servers_lb', list_servers_from_lb)
     app.router.add_post('/add_servers_lb', add_servers_to_lb)
     app.router.add_post('/remove_servers_lb', remove_servers_from_lb)
-    app.router.add_post('/list_shard_servers', list_shard_servers)
+    # app.router.add_post('/list_shard_servers', list_shard_servers)
 
     app.router.add_route('*', '/{tail:.*}', not_found)
 

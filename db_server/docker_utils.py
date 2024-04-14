@@ -4,7 +4,7 @@ import asyncio
 def spawn_server_cntnr(hostname):
     try:
         # Spawn a new container with the environment variable
-        res = os.popen(f'sudo docker run --name {hostname} --network mynet --network-alias {hostname} -e SERVER_ID={hostname} -d -p 5000 server_img:latest').read()
+        res = os.popen(f'docker run --name {hostname} --network mynet --network-alias {hostname} -e SERVER_ID={hostname} -d -p 5000 server_img:latest').read()
         print(res)
         if res is None or len(res) == 0:
             print(f"docker_utils: Error: Unable to start container with ID {hostname}.", flush=True)
@@ -20,7 +20,7 @@ def spawn_server_cntnr(hostname):
 def spawn_db_server_cntnr(hostname):
     try:
         # Spawn a new container with the environment variable
-        res = os.popen(f'sudo docker run --name {hostname} --network mynet --network-alias {hostname} -e SERVER_ID={hostname} -d -p 5000 db_server_img:latest').read()
+        res = os.popen(f'docker run --name {hostname} --network mynet --network-alias {hostname} -e SERVER_ID={hostname} -d -p 5000 db_server_img:latest').read()
         print(res)
         if res is None or len(res) == 0:
             print(f"docker_utils: Error: Unable to start container with ID {hostname}.", flush=True)
@@ -36,7 +36,7 @@ def spawn_db_server_cntnr(hostname):
 def kill_db_server_cntnr(hostname):
     try:
         # Remove the container
-        os.system(f"sudo docker stop {hostname} && sudo docker rm {hostname}")
+        os.system(f"docker stop {hostname} && docker rm {hostname}")
         print(f"docker_utils: Success: Container with ID {hostname} stopped and removed.", flush=True)
         return True
     
@@ -47,7 +47,7 @@ def kill_db_server_cntnr(hostname):
 # async def spawn_server_cntnr(hostname):
 #     try:
 #         # Spawn a new container with the environment variable
-#         cmd = f'sudo docker run --name {hostname} --network mynet --network-alias {hostname} -e SERVER_ID={hostname} -d -p 5000 server_img:latest'
+#         cmd = f'docker run --name {hostname} --network mynet --network-alias {hostname} -e SERVER_ID={hostname} -d -p 5000 server_img:latest'
 
 #         process = await asyncio.create_subprocess_shell(
 #             cmd,
@@ -73,7 +73,7 @@ def kill_db_server_cntnr(hostname):
 def kill_server_cntnr(hostname):
     try:
         # Remove the container
-        os.system(f"sudo docker stop {hostname} && sudo docker rm {hostname}")
+        os.system(f"docker stop {hostname} && docker rm {hostname}")
         print(f"docker_utils: Success: Container with ID {hostname} stopped and removed.")
         return True
     

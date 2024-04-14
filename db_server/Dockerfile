@@ -6,12 +6,12 @@ RUN apt-get install -y python3-pip
 RUN pip install --upgrade pip
 
 # Set the working directory
-WORKDIR /server/
-COPY ./requirements.txt /server/
+WORKDIR /db_server/
+COPY ./requirements.txt /db_server/
 RUN pip install -r requirements.txt
 
 RUN apt-get install -y default-mysql-server
 
-COPY . /server/
+COPY . /db_server/
 
 CMD ["bash","./db_server_start.sh"]

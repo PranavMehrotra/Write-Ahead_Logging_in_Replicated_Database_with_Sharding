@@ -38,8 +38,8 @@ ShardT_schema = {
 }
 
 MapT_schema = {
-    "columns": ["Shard_id", "Server_id", "Primary"],
-    "dtypes": ["String", "String", "Boolean"],
+    "columns": ["Shard_id", "Server_id"],
+    "dtypes": ["String", "String"],
     "pk": [],
 }
 
@@ -244,8 +244,18 @@ def synchronous_communicate_with_server(server, endpoint, payload={}):
 def synchronous_communicate_with_db_server(endpoint, payload={}):
     try:
         request_url = f'http://{db_server_hostname}:{SERVER_PORT}/{endpoint}'
-        response = requests.post(request_url, json=payload)
-        return response.status_code, response.json()
+        
+        if endpoint == "init_servers_hb" or endpoint == "stop_servers_hb":
+            response = requests.post(request_url, json=payload)
+            return response.status_code, response.json()
+        
+        elif endpoint == "list_active_hb_threads":
+            response = requests.get(request_url)
+            return response.status_code, response.json()
+        
+        else:
+            return 500, {"message": "Invalid endpoint"}
+        
     except Exception as e:
         return 500, {"message": f"{e}"}
 
@@ -1560,7 +1570,7 @@ async def status_handler(request):
 
 def recover_from_db_server():
     global lb
-    global hb_threads
+    # global hb_threads
     global shardT
     global StudT_schema
     try:

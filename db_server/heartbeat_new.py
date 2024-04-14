@@ -124,6 +124,10 @@ class HeartBeat(threading.Thread):
                             # will prevent the thread from respawning the server container (as we explicitly need to remove the server from the load balancer)
                             print("heartbeat: Stopping heartbeat thread for server: ", server_name, flush=True)
                             # session.close()
+                            
+                            
+                            # NEED TO ELECT PRIMARY SERVER FOR EACH SHARD OF THE SERVER IF THE SERVER IS REMOVED
+                            
                             return
                         print(f"heartbeat: Server {server_name} is down!")
                         print(f"heartbeat: Spawning a new server: {server_name}!", flush=True)

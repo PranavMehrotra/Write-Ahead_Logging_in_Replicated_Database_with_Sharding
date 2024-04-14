@@ -3,10 +3,9 @@ from aiohttp import web
 from manager import Manager
 import json
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List
 from heartbeat_new import HeartBeat
-from load_balancer.docker_utils import kill_server_cntnr
-from load_balancer.RWLock import RWLock
+from RWLock import RWLock
 import aiohttp
 import asyncio
 
@@ -20,7 +19,7 @@ hb_threads: Dict[str, HeartBeat] = {}
 
 # MapT is a dictionary with key as shard_id and value as a list whose 
 # first item is a string (the primary server for that shard) and second item is a list of secondary servers
-MapT_dict: Dict[str, List[str, List[str]]] = {}
+MapT_dict: Dict[str, List] = {}
 MapT_dict_lock = RWLock()
 
 
@@ -41,7 +40,7 @@ async def communicate_with_server(server, endpoint, payload={}):
         return 500, {"error": "Internal Server Error"}
             
         
-async def elect_primary_server(shard: str, active_servers: List[str]) -> str:
+async def elect_primary_server(shard: str, active_servers: List) -> str:
     
     # Elect the server with the latest transaction id as the primary server
     
@@ -391,7 +390,7 @@ async def config_change_handler(request):
             servers = list(servers_to_shard.keys())
             
             for server in servers:
-                t1 = HeartBeat(server, StudT_schema, MapT_dict, MapT_dict_lock)
+                t1 = HeartBeat(server, StudT_schema, MapT_dict, MapT_dict_lock, elect_primary_server=elect_primary_server)
                 hb_threads[server] = t1
                 t1.start()
             

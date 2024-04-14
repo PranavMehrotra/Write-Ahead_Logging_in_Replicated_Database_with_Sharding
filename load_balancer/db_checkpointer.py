@@ -2,8 +2,6 @@ import threading
 import sys
 import os
 import requests
-import time
-import requests
 from RWLock import RWLock
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))

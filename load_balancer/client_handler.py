@@ -1,8 +1,6 @@
-import signal
 from aiohttp import web
 import random
 from load_balancer import LoadBalancer
-from heartbeat import HeartBeat
 from db_checkpointer import Checkpointer
 from docker_utils import *
 import aiohttp
@@ -1561,6 +1559,11 @@ async def init_handler(request):
     serv_to_shard = {server: serv_to_shard[server] for server in added_servers}
 
 
+    # db_server is not running, spawn a new container and configure it
+    success, response_json = await spawn_and_config_db_server(serv_to_shard)
+    if not success:
+        return web.json_response(response_json, status=400)
+    
     # # Spawn the heartbeat threads for the added servers
     # for server in added_servers:
     #     t1 = HeartBeat(server, StudT_schema)
@@ -1591,12 +1594,6 @@ async def init_handler(request):
 
     
     # await asyncio.sleep(SLEEP_BEFORE_FIRST_REQUEST)
-
-
-    # db_server is not running, spawn a new container and configure it
-    success, response_json = await spawn_and_config_db_server(serv_to_shard)
-    if not success:
-        return web.json_response(response_json, status=400)
 
 
     payload = {

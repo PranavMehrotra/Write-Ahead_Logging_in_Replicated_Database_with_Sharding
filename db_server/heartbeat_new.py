@@ -7,9 +7,8 @@ import requests
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from load_balancer.RWLock import RWLock
-from load_balancer.docker_utils import kill_server_cntnr
-from db_server.db_server import elect_primary_server
+from RWLock import RWLock
+from docker_utils import kill_server_cntnr
 
 HEARTBEAT_INTERVAL = 0.2
 SEND_FIRST_HEARTBEAT_AFTER = 2
@@ -82,7 +81,7 @@ def sync_communicate_with_lb(lb_ip, endpoint, payload={}):
 #         return 500, {"message": f"{e}"}
 
 class HeartBeat(threading.Thread):
-    def __init__(self, server_name, studt_schema, MapT_dict: dict, MapT_dict_lock: RWLock, server_port=5000):
+    def __init__(self, server_name, studt_schema, MapT_dict: dict, MapT_dict_lock: RWLock, elect_primary_server, server_port=5000):
         super(HeartBeat, self).__init__()
         self._server_name = server_name
         self._server_port = server_port
@@ -90,6 +89,7 @@ class HeartBeat(threading.Thread):
         self.StudT_schema = studt_schema
         self.MapT_dict = MapT_dict
         self.MapT_dict_lock = MapT_dict_lock
+        self.elect_primary_server = elect_primary_server
         
 
     def stop(self):
@@ -105,7 +105,7 @@ class HeartBeat(threading.Thread):
             primary_server = self.MapT_dict[shard_id][0]
             secondary_servers = self.MapT_dict[shard_id][1:]
             if primary_server == server_name:
-                new_primary_server = elect_primary_server(shard=shard_id, active_servers=secondary_servers)
+                new_primary_server = self.elect_primary_server(shard=shard_id, active_servers=secondary_servers)
                 if new_primary_server != "":
                     self.MapT_dict[shard_id][0] = new_primary_server
                     self.MapT_dict[shard_id][1] = secondary_servers - [new_primary_server]

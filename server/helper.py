@@ -137,7 +137,54 @@ class SQLHandler:
             return tabname,200
         except Exception as e:
             return e, 500
+        
+    
+    # def Drop_table(self,tabname):
+    #     try:
+    #         res, status = self.query(f"SHOW TABLES;")
+    #         if status != 200:
+    #             return res, status
+            
+    #         if tabname not in [r[0] for r in res]:
+    #             return f"Table with name {tabname} does not exist in the database, hence cannot be dropped",404
+            
+    #         res, status = self.query(f"DROP TABLE {tabname}")
+    #         if status != 200:
+    #             return res, status
+            
+    #         return "Table dropped successfully",200
+    #     except Exception as e:
+    #         return e, 500
 
+
+    def Clear_table(self,tabname):
+        
+        try:
+            res,status = self.query(f"SHOW TABLES;")
+            if status != 200:
+                return res, status
+            
+            if tabname not in [r[0] for r in res]:
+                return f"Table with name {tabname} does not exist in the database, hence cannot be cleared",404
+            
+            # Execute SQL query to clear the table
+            res,status = self.query(f"DELETE FROM {tabname}")
+            if status != 200:
+                return res, status
+            
+            # check if the table is empty
+            res,status = self.query(f"SELECT * FROM {tabname}")
+            if status != 200:
+                return res, status
+            
+            if len(res) != 0: # Table not cleared
+                return f"Could not fully clear table {tabname}", 500
+    
+            # Table cleared successfully
+            return f"Table {tabname} cleared successfully!", 200
+
+        except Exception as e:
+            return e, 500
 
     def Get_range(self,table_name,low, high, col):
         

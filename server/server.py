@@ -127,7 +127,7 @@ async def write_database(request):
         if status == 200:
             response_data = {
                 "message": message,
-                "current_idx":id,
+                # "current_idx":id,
                 "status": "success"
             }
             
@@ -136,7 +136,7 @@ async def write_database(request):
                 # "error": message,
                 # "message": f"<Error>: {message}",
                 "message": str(message),
-                "current_idx":id,
+                # "current_idx":id,
                 "status": "failure"
             }
         # print(f"Response: {response_data}", flush=True)

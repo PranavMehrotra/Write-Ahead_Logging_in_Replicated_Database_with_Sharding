@@ -3,10 +3,14 @@ from aiohttp import web
 from manager import Manager
 import json
 import os
+from typing import Dict, List, Tuple
+from heartbeat_new import HeartBeat
 
 server_id = os.environ.get("SERVER_ID", "server")
 mgr = Manager(host='localhost',user='root',password=f"{server_id}@123")
 StudT_schema = {}
+
+hb_threads: Dict[str, HeartBeat] = {}
 
 async def config(request):
     try:
@@ -47,6 +51,33 @@ async def heartbeat(request):
     except Exception as e:
         print(f"DB_Server: Error in heartbeat endpoint: {str(e)}")
         return web.json_response({"error": "Internal Server Error"}, status=500)
+    
+async def init_heartbeat_threads(request):
+    
+    try:
+        request_json = await request.json()
+        if isinstance(request_json, str):
+            request_json = json.loads(request_json)
+            
+        if 'servers' not in request_json:
+            print("No servers found in request to start heartbeat threads")
+            return web.json_response({"error": "'servers' field missing in the request"}, status=400)
+        
+        servers = request_json.get('servers', [])
+        if not servers:
+            print("No servers found in request to start heartbeat threads")
+            return web.json_response({"error": "No servers found in request"}, status=400)
+        
+        for server in servers:
+        
+            pass
+            
+    except Exception as e:
+        print(f"DB_Server: Error in init_heartbeat_threads endpoint: {str(e)}")
+        return web.json_response({"error": "Internal Server Error"}, status=500)
+
+        
+        
 
 async def read_database(request):
     try:
@@ -155,6 +186,8 @@ async def delete_entries(request):
         
         print(f"DB_Server: Error in delete endpoint: {str(e)}")
         return web.json_response({"error": "Internal Server Error"}, status=500)
+    
+    
 
 async def delete_table(request):
     try:
@@ -214,6 +247,7 @@ async def not_found(request):
     return web.Response(text="Not Found", status=400)
 
 
+
 # Define the main function to run the web server
 def run_server():
     # Create an instance of the web Application
@@ -228,7 +262,6 @@ def run_server():
     app.router.add_delete('/del', delete_entries)
     app.router.add_delete('/del_table', delete_table)
     app.router.add_post('/clear_table', clear_table)
-
 
     # Add a catch-all route for any other endpoint, which returns a 400 Bad Request
     app.router.add_route('*', '/{tail:.*}', not_found)

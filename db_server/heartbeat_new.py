@@ -10,11 +10,13 @@ import asyncio
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from load_balancer import LoadBalancer
-from docker_utils import kill_server_cntnr
+from load_balancer.docker_utils import kill_server_cntnr
 
 HEARTBEAT_INTERVAL = 0.2
 SEND_FIRST_HEARTBEAT_AFTER = 2
 SERVER_PORT = 5000
+LB_IP_ADDR = '0.0.0.0'
+LB_PORT = 5000
 
 def synchronous_communicate_with_server(server, endpoint, payload={}):
     try:
@@ -39,6 +41,14 @@ def synchronous_communicate_with_server(server, endpoint, payload={}):
     except Exception as e:
         return 500, {"message": f"{e}"}
 
+
+def sync_communicate_with_lb(lb_ip, endpoint, payload={}):
+    try:
+        request_url = f'http://{lb_ip}:{LB_PORT}/{endpoint}'
+        response = requests.post(request_url, json=payload)
+        return response.status_code, response.json()
+    except Exception as e:
+        return 500, {"message": f"{e}"}
 
 # async def communicate_with_server(server, endpoint, payload={}):
 #     try:
@@ -73,9 +83,8 @@ def synchronous_communicate_with_server(server, endpoint, payload={}):
 #         return 500, {"message": f"{e}"}
 
 class HeartBeat(threading.Thread):
-    def __init__(self, lb: LoadBalancer, server_name, studt_schema, server_port=5000):
+    def __init__(self, server_name, studt_schema, server_port=5000):
         super(HeartBeat, self).__init__()
-        self._lb = lb
         self._server_name = server_name
         self._server_port = server_port
         self._stop_event = threading.Event()
@@ -88,7 +97,6 @@ class HeartBeat(threading.Thread):
         return self._stop_event.is_set()
 
     def run(self):
-        lb = self._lb
         server_name = self._server_name
         server_port = self._server_port
         print("heartbeat: Heartbeat thread started for server: ", server_name, flush=True)
@@ -128,9 +136,40 @@ class HeartBeat(threading.Thread):
                         
                         # first get the serv_to_shard mapping using lb before removing the server 
                         # as we need to reconfigure the server with the same shard data
-                        servers, serv_to_shard = lb.list_servers(send_shard_info=True)
+                    
+                        # servers, serv_to_shard = lb.list_servers(send_shard_info=True)
+                        
+                        ### send request to the load balancer to get the server to shard mapping
+                        request_payload = {
+                            "send_shard_info": True
+                        }
+                        status, response = sync_communicate_with_lb(LB_IP_ADDR, "list_servers_lb", request_payload)
+                        if status != 200:
+                            print(f"heartbeat: Error in getting server to shard mapping from consistent hashing of load balancer\nError: {response.get('message', 'Unknown error')}")
+                            print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                            return
+                        
+                        servers = response.get('servers', [])
+                        serv_to_shard = response.get('serv_to_shard', {})
+                        
+                        
                         # then remove the server from the load balancer
-                        lb.remove_servers(1, [server_name])
+                        # lb.remove_servers(1, [server_name])
+                        
+                        # send request to the load balancer to remove the server
+                        request_payload = {
+                            "num_servers": 1,
+                            "servers": [server_name]
+                        }
+                        status, response = sync_communicate_with_lb(LB_IP_ADDR, "remove_servers_lb", request_payload)
+                        if status != 200:
+                            print(f"heartbeat: Error in removing server {server_name} from consistent hashing of load balancer\nError: {response.get('message', 'Unknown error')}")
+                            print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                            return
+                        
+                        else:
+                            print(f"heartbeat: Server {server_name} removed successfully from the consistent hashing of load balancer!", flush=True)
+                        
                         try: 
                             kill_server_cntnr(server_name)
                         except Exception as e:
@@ -140,7 +179,22 @@ class HeartBeat(threading.Thread):
                         
                         # reinstantiate an image of the server
                         server_shard_map = {server_name: serv_to_shard[server_name]}
-                        lb.add_servers(1, server_shard_map)
+                        # lb.add_servers(1, server_shard_map)
+                        
+                        # send request to the load balancer to add the servers and their server to shard mapping
+                        request_payload = {
+                            "num_servers": 1,
+                            "serv_to_shard": server_shard_map
+                        }
+                        status, response = sync_communicate_with_lb(LB_IP_ADDR, "add_servers_lb", request_payload)
+                        if status != 200:
+                            print(f"heartbeat: Error in adding server {server_name} to consistent hashing of load balancer\nError: {response.get('message', 'Unknown error')}")
+                            print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                            return
+                        
+                        else:
+                            print(f"heartbeat: Server {server_name} added successfully to the consistent hashing of load balancer!", flush=True)
+                            
                         
                         # function to configure the server based on an existing server which is already up and running
                         status, response = self.config_server(server_name, serv_to_shard)
@@ -188,9 +242,39 @@ class HeartBeat(threading.Thread):
                     
                     # first get the serv_to_shard mapping using lb before removing the server 
                     # as we need to reconfigure the server with the same shard data
-                    servers, serv_to_shard = lb.list_servers(send_shard_info=True)
+                    
+                    # servers, serv_to_shard = lb.list_servers(send_shard_info=True)
+
+                    request_payload = {
+                        "send_shard_info": True
+                    }
+                    status, response = sync_communicate_with_lb(LB_IP_ADDR, "list_servers_lb", request_payload)
+                    if status != 200:
+                        print(f"heartbeat: Error in getting server to shard mapping from consistent hashing of load balancer\nError: {response.get('message', 'Unknown error')}")
+                        print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                        return
+                    
+                    servers = response.get('servers', [])
+                    serv_to_shard = response.get('serv_to_shard', {})                    
+                    
+                    
                     # then remove the server from the load balancer
-                    lb.remove_servers(1, [server_name])
+                    # lb.remove_servers(1, [server_name])
+                    
+                    # send request to the load balancer to remove the server
+                    request_payload = {
+                        "num_servers": 1,
+                        "servers": [server_name]
+                    }
+                    status, response = sync_communicate_with_lb(LB_IP_ADDR, "remove_servers_lb", request_payload)
+                    if status != 200:
+                        print(f"heartbeat: Error in removing server {server_name} from consistent hashing of load balancer\nError: {response.get('message', 'Unknown error')}")
+                        print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                        return
+                    
+                    else:
+                        print(f"heartbeat: Server {server_name} removed successfully from the consistent hashing of load balancer!", flush=True)                   
+                    
                     try:
                         kill_server_cntnr(server_name)
                     except Exception as e:
@@ -200,7 +284,21 @@ class HeartBeat(threading.Thread):
                 
                     # reinstantiate an image of the server
                     server_shard_map = {server_name: serv_to_shard[server_name]}
-                    lb.add_servers(1, server_shard_map)
+                    # lb.add_servers(1, server_shard_map)
+                    
+                    # send request to the load balancer to add the servers and their server to shard mapping
+                    request_payload = {
+                        "num_servers": 1,
+                        "serv_to_shard": server_shard_map
+                    }
+                    status, response = sync_communicate_with_lb(LB_IP_ADDR, "add_servers_lb", request_payload)
+                    if status != 200:
+                        print(f"heartbeat: Error in adding server {server_name} to consistent hashing of load balancer\nError: {response.get('message', 'Unknown error')}")
+                        print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                        return
+                    
+                    else:
+                        print(f"heartbeat: Server {server_name} added successfully to the consistent hashing of load balancer!", flush=True)                    
 
                     # function to configure the server based on an existing server which is already up and running
                     status, response = self.config_server(server_name, serv_to_shard)
@@ -229,7 +327,7 @@ class HeartBeat(threading.Thread):
 
     def config_server(self, server_name, serv_to_shard):
         
-        lb = self._lb
+        # lb = self._lb
         shards_for_server = serv_to_shard[server_name]
         
         # send the config request to the server
@@ -257,7 +355,11 @@ class HeartBeat(threading.Thread):
             data_copied = False
             
             # find which other servers have the same shard
+            
+            ## NEED TO CHANGE: DATA WILL BE ALWAYS COPIED ONLY FROM THE PRIMARY SERVER FOR A SHARD
             servers = lb.list_shard_servers(shard_id)
+            
+            
             if server_name in servers:
                 servers.remove(server_name)
             

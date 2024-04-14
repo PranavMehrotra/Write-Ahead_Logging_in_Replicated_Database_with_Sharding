@@ -25,22 +25,24 @@ checkpointer_thread: Checkpointer = ""
 
 shardT_lock = RWLock()
 
-shardT = {}   # shardT is a dictionary that maps "Stud_id_low" to a list ["Shartd_id", "Shard_size", "valid_idx"]
-                # Example: shardT[100] = ["sh1", "100", 123]
+shardT = {}   # shardT is a dictionary that maps "Stud_id_low" to a list ["Shartd_id", "Shard_size"]
+                # Example: shardT[100] = ["sh1", 100]
 stud_id_low: List[Tuple[int, int]] = [] # stud_id_low is a global list of tuples that stores all the (Stud_id_low, Stud_id_low + Shard_size) values (of all shards) in sorted order
 
 StudT_schema = {}   # schema is a dictionary, which has list of all columns of the StudT table and their data types
 db_server_hostname = "db_server"
 ShardT_schema = {
-    "columns": ["Stud_id_low", "Shard_id", "Shard_size", "valid_idx"],
-    "dtypes": ["Number", "String", "Number", "Number"],
+    "columns": ["Stud_id_low", "Shard_id", "Shard_size"],
+    "dtypes": ["Number", "String", "Number"],
     "pk": ["Stud_id_low"],
 }
+
 MapT_schema = {
-    "columns": ["Shard_id", "Server_id"],
-    "dtypes": ["String", "String"],
+    "columns": ["Shard_id", "Server_id", "Primary"],
+    "dtypes": ["String", "String", "Boolean"],
     "pk": [],
 }
+
 init_done = False
 
 
@@ -384,7 +386,8 @@ async def add_server_handler(request):
 
     # Spawn the heartbeat threads for the added servers
     for server in added_servers:
-        t1 = HeartBeat(lb, server, StudT_schema)
+        # t1 = HeartBeat(lb, server, StudT_schema)
+        t1 = HeartBeat(server, StudT_schema)
         hb_threads[server] = t1
         t1.start()
 
@@ -648,17 +651,22 @@ async def write_one_shard(shard_id, shard_stud_id_low, data):
     error_flag = False
     rollback = False
     temp_lock.acquire_writer()
-    shardT_lock.acquire_reader()
-    try:
-        valid_idx = shardT[shard_stud_id_low][2]
-    except KeyError:
-        shardT_lock.release_reader()
-        temp_lock.release_writer()
-        return 500, {"message": f"Internal Server Error: The requested data could not be written"}
-    shardT_lock.release_reader()
+    
+    ### VALID-IDX IS NOT NEEDED ANYMORE AS WE ARE FOLLOWING THE WRITE-AHEAD LOGGING PROTOCOL
+    
+    # shardT_lock.acquire_reader()
+    # try:
+    #     valid_idx = shardT[shard_stud_id_low][2]
+    # except KeyError:
+    #     shardT_lock.release_reader()
+    #     temp_lock.release_writer()
+    #     return 500, {"message": f"Internal Server Error: The requested data could not be written"}
+    # shardT_lock.release_reader()
+    
+    
     payload = {
         "shard": shard_id,
-        "curr_idx": valid_idx,
+        # "curr_idx": valid_idx,
         "data": data
     }
     # print(f"client_handler: Writing data to shard: {shard_id}, data: {data}")
@@ -735,15 +743,19 @@ async def write_one_shard(shard_id, shard_stud_id_low, data):
                 }
                 return 500, response_json
         
-        # Update the valid_idx in the shardT
-        shardT_lock.acquire_reader()
-        try:
-            shardT[shard_stud_id_low][2] = valid_idx + len(data)
-        except KeyError:
-            shardT_lock.release_reader()
-            temp_lock.release_writer()
-            return 500, {"message": f"Internal Server Error: The requested data could not be written"}
-        shardT_lock.release_reader()
+        
+        ### VALID-IDX IS NOT NEEDED ANYMORE AS WE ARE FOLLOWING THE WRITE-AHEAD LOGGING PROTOCOL
+        
+        # # Update the valid_idx in the shardT
+        # shardT_lock.acquire_reader()
+        # try:
+        #     shardT[shard_stud_id_low][2] = valid_idx + len(data)
+        # except KeyError:
+        #     shardT_lock.release_reader()
+        #     temp_lock.release_writer()
+        #     return 500, {"message": f"Internal Server Error: The requested data could not be written"}
+        # shardT_lock.release_reader()
+        
         temp_lock.release_writer()
         return 200, {"message": "success"}
 
@@ -1141,10 +1153,12 @@ async def del_data_handler(request):
                     }
                     return web.json_response(response_json, status=500)
 
-            # Update the valid_idx in the shardT, without acquiring writer lock
-            shardT_lock.acquire_reader()
-            shardT[shard_stud_id_low][2] -= 1
-            shardT_lock.release_reader()
+            ### VALID-IDX IS NOT NEEDED ANYMORE AS WE ARE FOLLOWING THE WRITE-AHEAD LOGGING PROTOCOL
+
+            # # Update the valid_idx in the shardT, without acquiring writer lock
+            # shardT_lock.acquire_reader()
+            # shardT[shard_stud_id_low][2] -= 1
+            # shardT_lock.release_reader()
 
             temp_lock.release_writer()
             print(f"client_handler: Data entry with Stud_id:{stud_id} deleted from all replicas", flush=True)
@@ -1368,7 +1382,7 @@ async def init_handler(request):
     
     # Spawn the heartbeat threads for the added servers
     for server in added_servers:
-        t1 = HeartBeat(lb, server, StudT_schema)
+        t1 = HeartBeat(server, StudT_schema)
         hb_threads[server] = t1
         t1.start()
 
@@ -1478,7 +1492,7 @@ def recover_from_db_server():
                 print(f"client_handler: Added {num_added} servers to the system")
                 # Spawn the heartbeat threads for the added servers
                 for server in added_servers:
-                    t1 = HeartBeat(lb, server, StudT_schema)
+                    t1 = HeartBeat(server, StudT_schema)
                     hb_threads[server] = t1
                     t1.start()
                 return True
@@ -1509,6 +1523,158 @@ def interrupt_handler(signum, frame):
     # Kill the db_server container
     kill_db_server_cntnr(db_server_hostname)
     exit(0)
+    
+    
+async def list_servers_from_lb(request):
+    global lb
+
+    try:
+        request_json = await request.json()
+        
+        # check if the payload has the required fields
+        if 'send_shard_info' not in request_json or request_json['send_shard_info'] not in [True, False]:
+            response_json = {
+                "message": f"<Error> Invalid payload format: 'send_shard_info' field missing or invalid in request",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
+        
+        send_shard_info = request_json['send_shard_info']
+        
+        if send_shard_info:
+            servers, serv_to_shard = lb.list_servers(send_shard_info=True)
+            response_json = {
+                "servers": servers,
+                "serv_to_shard": serv_to_shard
+            }
+            return web.json_response(response_json, status=200)
+        
+        else:
+            servers = lb.list_servers(send_shard_info=False)
+            response_json = {
+                "servers": servers
+            }
+            return web.json_response(response_json, status=200)
+            
+    except Exception as e:
+        print(f"client_handler: <Error> : {e}", flush=True)
+        response_json = {
+            "message": f"<Error>: {e}",
+            "status": "failure"
+        }
+        return web.json_response(response_json, status=400)
+    
+async def add_servers_to_lb(request):
+    global lb
+    
+    try:
+        request_json = await request.json()
+        
+        if 'num_servers' not in request_json:
+            response_json = {
+                "message": f"<Error> Invalid payload format: 'num_servers' field missing in request",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
+        
+        if 'serv_to_shard' not in request_json:
+            response_json = {
+                "message": f"<Error> Invalid payload format: 'serv_to_shard' field missing in request",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
+        
+        num_servers = request_json['num_servers']
+        serv_to_shard = request_json.get('serv_to_shard', {})
+        
+        if num_servers != len(list(serv_to_shard.keys())):
+            response_json = {
+                "message": f"<Error> Invalid payload format: 'num_servers' field and no of servers in 'serv_to_shard' do not match",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
+        
+        num_servers_added, added_servers, err = lb.add_servers(num_servers, serv_to_shard)
+        if num_servers_added == num_servers and err=="":
+            response_json = {
+                "message": f"Added {num_servers_added} servers to the consistent hashing",
+                "status": "success"
+            }
+            return web.json_response(response_json, status=200)
+        else:
+            response_json = {
+                "message": f"<Error> Failed to add servers to the consistent hashing: {err}",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
+        
+    except Exception as e:
+        print(f"client_handler: <Error> : {e}", flush=True)
+        response_json = {
+            "message": f"<Error>: {e}",
+            "status": "failure"
+        }
+        return web.json_response(response_json, status=400)
+            
+    
+async def remove_servers_from_lb(request):
+    global lb
+    
+    try:
+        request_json = await request.json()
+        
+        if 'num_servers' not in request_json:
+            response_json = {
+                "message": f"<Error> Invalid payload format: 'num_servers' field missing in request",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
+        
+        if 'servers' not in request_json:
+            response_json = {
+                "message": f"<Error> Invalid payload format: 'servers' field missing in request",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
+        
+        servers = request_json.get('servers', [])
+        num_servers = request_json['num_servers']
+        
+        if num_servers != len(servers):
+            response_json = {
+                "message": f"<Error> Invalid payload format: 'num_servers' field and no of servers in 'servers' do not match",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
+        
+        num_servers_removed, removed_servers, err = lb.remove_servers(servers)
+        
+        if num_servers_removed == num_servers and err=="":
+            response_json = {
+                "message": f"Removed {num_servers_removed} servers from the consistent hashing",
+                "status": "success"
+            }
+            return web.json_response(response_json, status=200)
+        else:
+            response_json = {
+                "message": f"<Error> Failed to remove servers from the consistent hashing: {err}",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
+        
+    except Exception as e:
+        print(f"client_handler: <Error> : {e}", flush=True)
+        response_json = {
+            "message": f"<Error>: {e}",
+            "status": "failure"
+        }
+        return web.json_response(response_json, status=400)
+    
+async def list_shard_servers(request):
+    
+    
+    pass
+        
 
 def run_load_balancer():
     global lb
@@ -1555,6 +1721,12 @@ def run_load_balancer():
     app.router.add_put('/update', update_data_handler)
     app.router.add_delete('/del', del_data_handler)
     
+    
+    # For communicating b/w Shard Manager and Load Balancer
+    app.router.add_post('/list_servers_lb', list_servers_from_lb)
+    app.router.add_post('/add_servers_lb', add_servers_to_lb)
+    app.router.add_post('/remove_servers_lb', remove_servers_from_lb)
+    app.router.add_post('/list_shard_servers', list_shard_servers)
 
     app.router.add_route('*', '/{tail:.*}', not_found)
 

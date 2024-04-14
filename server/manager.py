@@ -47,8 +47,8 @@ class Manager:
             if schema and columns and dtypes and shards:    
                 for shard in shards:
                     message, status = self.sql_handler.Create_table(shard, columns, dtypes)
-                    print(message, status, flush=True)
-                    print(f"status: {status}", flush=True)
+                    # print(message, status, flush=True)
+                    # print(f"status: {status}", flush=True)
                     if status != 200:
                         return message, status
                     
@@ -143,15 +143,17 @@ class Manager:
             if 'shard' not in request_json:
                 return "'shard' field missing in request", 400, -1
             
-            if 'curr_idx' not in request_json:
-                return "'curr_idx' field missing in request", 400, -1
+            # if 'curr_idx' not in request_json:
+            #     return "'curr_idx' field missing in request", 400, -1
             
             if 'data' not in request_json:
                 return "'data' field missing in request", 400, -1
         
             tablename = request_json.get("shard")
             data = request_json.get("data")
-            curr_idx = request_json.get("curr_idx")
+            
+            # curr_idx is not to be used for this assignment
+            # curr_idx = request_json.get("curr_idx")
             num_entry = len(data)
 
             # res,status = self.sql_handler.query(f"SELECT COUNT(*) FROM {tablename}")
@@ -164,6 +166,7 @@ class Manager:
             #     return "Invalid current index provided",400,valid_idx
             valid_idx = 0
             row_str = ''
+            
             
             for v in data:
                 missing_columns = self.schema_set - set(v.keys())
@@ -194,6 +197,11 @@ class Manager:
             
             if status != 200:    
                 return message, status,valid_idx
+            
+            # check if the no of entries added is equal to the no of entries in the data object
+            rows_added = self.sql_handler.mydb.cursor().rowcount
+            if rows_added != num_entry:
+                return "Could not add all data entries", 500, valid_idx + rows_added
             
             return "Data entries added", 200, valid_idx+num_entry
         
@@ -289,3 +297,38 @@ class Manager:
 
         except Exception as e:
             return e,500
+        
+    def Reconfig_table(self, table_name, data):
+        
+        try:
+            if not self.sql_handler.connected:
+                message, status = self.sql_handler.connect()
+                if status != 200:
+                    return message, status
+                
+                
+                # clear the table
+                message, status = self.sql_handler.Clear_table(table_name)
+                if status != 200:
+                    return message, status
+                
+                print(f"Table {table_name} cleared successfully", flush=True)
+                
+                # copy the consistent data to the table
+                shard = table_name         
+                request_json = {"shard": shard, "data": data}
+                message, status, _ = self.Write_database(request_json)
+                
+                if status != 200:
+                    return message, status
+                
+                print(f"Data copied successfully to {shard}", flush=True)
+                
+                return f"Table {shard} reconfigured successfully", 200
+            
+            else:
+                return "Invalid JSON format for reconfiguring table", 400
+            
+        except Exception as e:
+            return e, 500
+            

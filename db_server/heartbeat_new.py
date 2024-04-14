@@ -7,8 +7,9 @@ import requests
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-
+from load_balancer.RWLock import RWLock
 from load_balancer.docker_utils import kill_server_cntnr
+from db_server.db_server import elect_primary_server
 
 HEARTBEAT_INTERVAL = 0.2
 SEND_FIRST_HEARTBEAT_AFTER = 2
@@ -21,7 +22,7 @@ def synchronous_communicate_with_server(server, endpoint, payload={}):
         request_url = f'http://{server}:{SERVER_PORT}/{endpoint}'
         if endpoint == "copy" or endpoint == "commit" or endpoint == "rollback":
             response = requests.get(request_url, json=payload)
-            return response.status_code, response.json()
+            return response.sMapT_dicttatus_code, response.json()
             
         elif endpoint == "read" or endpoint == "write" or endpoint == "config":
             response = requests.post(request_url, json=payload)
@@ -81,18 +82,45 @@ def sync_communicate_with_lb(lb_ip, endpoint, payload={}):
 #         return 500, {"message": f"{e}"}
 
 class HeartBeat(threading.Thread):
-    def __init__(self, server_name, studt_schema, server_port=5000):
+    def __init__(self, server_name, studt_schema, MapT_dict: dict, MapT_dict_lock: RWLock, server_port=5000):
         super(HeartBeat, self).__init__()
         self._server_name = server_name
         self._server_port = server_port
         self._stop_event = threading.Event()
         self.StudT_schema = studt_schema
+        self.MapT_dict = MapT_dict
+        self.MapT_dict_lock = MapT_dict_lock
+        
 
     def stop(self):
         self._stop_event.set()
 
     def stopped(self):
         return self._stop_event.is_set()
+    
+    def elect_primary_for_all_shards(self, server_name, server_shards):
+        
+        self.MapT_dict_lock.acquire_writer()
+        for shard_id in server_shards:
+            primary_server = self.MapT_dict[shard_id][0]
+            secondary_servers = self.MapT_dict[shard_id][1:]
+            if primary_server == server_name:
+                new_primary_server = elect_primary_server(shard=shard_id, active_servers=secondary_servers)
+                if new_primary_server != "":
+                    self.MapT_dict[shard_id][0] = new_primary_server
+                    self.MapT_dict[shard_id][1] = secondary_servers - [new_primary_server]
+                    
+                else:
+                    print(f"heartbeat: Error in electing new primary server for shard {shard_id} after server {server_name} was removed")
+                    # print(f"heartbeat: Stopping heartbeat thread for server: {server_name}", flush=True)
+                    # return
+                
+            elif server_name in secondary_servers:
+                self.MapT_dict[shard_id][1] = secondary_servers - [server_name]
+                
+        self.MapT_dict_lock.release_writer()     
+        
+        return        
 
     def run(self):
         server_name = self._server_name
@@ -122,13 +150,14 @@ class HeartBeat(threading.Thread):
                         # Check if the thread is stopped
                         if self.stopped(): # this condition would be true when the container is already killed and the thread is still running (for a remove server operation)
                             # will prevent the thread from respawning the server container (as we explicitly need to remove the server from the load balancer)
-                            print("heartbeat: Stopping heartbeat thread for server: ", server_name, flush=True)
+                            print("heartbeat: Stopping heartbeat thread for server: ", server_name, flush=True)                    
                             # session.close()
                             
-                            
                             # NEED TO ELECT PRIMARY SERVER FOR EACH SHARD OF THE SERVER IF THE SERVER IS REMOVED
-                            
+                            # ALREADY TAKEN CARE OF IN THE config_change_handler FUNCTION IN db_server.py before this thread was stopped
                             return
+                        
+                        
                         print(f"heartbeat: Server {server_name} is down!")
                         print(f"heartbeat: Spawning a new server: {server_name}!", flush=True)
                         cntr = 0
@@ -148,7 +177,7 @@ class HeartBeat(threading.Thread):
                         status, response = sync_communicate_with_lb(LB_IP_ADDR, "list_servers_lb", request_payload)
                         if status != 200:
                             print(f"heartbeat: Error in getting server to shard mapping from consistent hashing of load balancer\nError: {response.get('message', 'Unknown error')}")
-                            print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                            print(f"heartbeat: Stopping heartbeat thread for server: {server_name}", flush=True)
                             return
                         
                         servers = response.get('servers', [])
@@ -166,7 +195,7 @@ class HeartBeat(threading.Thread):
                         status, response = sync_communicate_with_lb(LB_IP_ADDR, "remove_servers_lb", request_payload)
                         if status != 200:
                             print(f"heartbeat: Error in removing server {server_name} from consistent hashing of load balancer\nError: {response.get('message', 'Unknown error')}")
-                            print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                            print(f"heartbeat: Stopping heartbeat thread for server: {server_name}", flush=True)
                             return
                         
                         else:
@@ -176,12 +205,19 @@ class HeartBeat(threading.Thread):
                             kill_server_cntnr(server_name)
                         except Exception as e:
                             print(f"heartbeat: could not kill server {server_name}\nError: {e}", flush=True)
-                            print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                            print(f"heartbeat: Stopping heartbeat thread for server: {server_name}", flush=True)
                             return  # IS IT OKAY TO RETURN HERE?
                         
                         # reinstantiate an image of the server
                         server_shard_map = {server_name: serv_to_shard[server_name]}
                         # lb.add_servers(1, server_shard_map)
+                        
+                        ### DO PRIMARY SERVER ELECTION FOR EACH SHARD OF THIS SERVER (FOR WHICH THIS SERVER WAS PRIMARY) BEFORE ADDING THE SERVER BACK TO THE SYSTEM
+                        server_shards = serv_to_shard[server_name]
+                        
+                        self.elect_primary_for_all_shards(server_name, server_shards)
+                        
+                        ### ADD THE SERVER BACK TO THE SYSTEM
                         
                         # send request to the load balancer to add the servers and their server to shard mapping
                         request_payload = {
@@ -191,14 +227,14 @@ class HeartBeat(threading.Thread):
                         status, response = sync_communicate_with_lb(LB_IP_ADDR, "add_servers_lb", request_payload)
                         if status != 200:
                             print(f"heartbeat: Error in adding server {server_name} to consistent hashing of load balancer\nError: {response.get('message', 'Unknown error')}")
-                            print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                            print(f"heartbeat: Stopping heartbeat thread for server: {server_name}", flush=True)
                             return
                         
                         else:
                             print(f"heartbeat: Server {server_name} added successfully to the consistent hashing of load balancer!", flush=True)
                             
                         
-                        # function to configure the server based on an existing server which is already up and running
+                        # function to configure the server based on the primary server for each shard
                         status, response = self.config_server(server_name, serv_to_shard)
                         if (status == 200):
                             print(f"heartbeat: Server {server_name} reconfigured successfully with all the data!", flush=True)
@@ -212,13 +248,10 @@ class HeartBeat(threading.Thread):
                             except Exception as e:
                                 print(f"heartbeat: could not kill server {server_name}\nError: {e}", flush=True)
                                 
-                            print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                            print(f"heartbeat: Stopping heartbeat thread for server: {server_name}", flush=True)
                             return # IS IT OKAY TO RETURN HERE?
                             
-                        
-                        # print("heartbeat: Closing session!")
-                        # await session.close()
-                        # break
+
                 else :
                     cntr = 0
 
@@ -234,7 +267,12 @@ class HeartBeat(threading.Thread):
                         # will prevent the thread from respawning the server container (as we explicitly need to remove the server from the load balancer)
                         print("heartbeat: Stopping heartbeat thread for server: ", server_name, flush=True)
                         # session.close()
+                        
+                        # NEED TO ELECT PRIMARY SERVER FOR EACH SHARD OF THE SERVER IF THE SERVER IS REMOVED
+                        # ALREADY TAKEN CARE OF IN THE config_change_handler FUNCTION IN db_server.py before this thread was stopped                        
                         return
+                    
+                    
                     print(f"heartbeat: Server {server_name} is down!")
                     print(f"heartbeat: Spawning a new server: {server_name}!", flush=True)
                     cntr = 0
@@ -253,7 +291,7 @@ class HeartBeat(threading.Thread):
                     status, response = sync_communicate_with_lb(LB_IP_ADDR, "list_servers_lb", request_payload)
                     if status != 200:
                         print(f"heartbeat: Error in getting server to shard mapping from consistent hashing of load balancer\nError: {response.get('message', 'Unknown error')}")
-                        print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                        print(f"heartbeat: Stopping heartbeat thread for server: {server_name}", flush=True)
                         return
                     
                     servers = response.get('servers', [])
@@ -271,7 +309,7 @@ class HeartBeat(threading.Thread):
                     status, response = sync_communicate_with_lb(LB_IP_ADDR, "remove_servers_lb", request_payload)
                     if status != 200:
                         print(f"heartbeat: Error in removing server {server_name} from consistent hashing of load balancer\nError: {response.get('message', 'Unknown error')}")
-                        print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                        print(f"heartbeat: Stopping heartbeat thread for server: {server_name}", flush=True)
                         return
                     
                     else:
@@ -281,7 +319,7 @@ class HeartBeat(threading.Thread):
                         kill_server_cntnr(server_name)
                     except Exception as e:
                         print(f"heartbeat: could not kill server {server_name}\nError: {e}", flush=True)
-                        print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                        print(f"heartbeat: Stopping heartbeat thread for server: {server_name}", flush=True)
                         return  # IS IT OKAY TO RETURN HERE?    
                 
                     # reinstantiate an image of the server
@@ -296,7 +334,7 @@ class HeartBeat(threading.Thread):
                     status, response = sync_communicate_with_lb(LB_IP_ADDR, "add_servers_lb", request_payload)
                     if status != 200:
                         print(f"heartbeat: Error in adding server {server_name} to consistent hashing of load balancer\nError: {response.get('message', 'Unknown error')}")
-                        print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                        print(f"heartbeat: Stopping heartbeat thread for server: {server_name}", flush=True)
                         return
                     
                     else:
@@ -316,12 +354,10 @@ class HeartBeat(threading.Thread):
                         except Exception as e:
                             print(f"heartbeat: could not kill server {server_name}\nError: {e}", flush=True)
                             
-                        print(f"heartbeat: Stoppping heartbeat thread for server: {server_name}", flush=True)
+                        print(f"heartbeat: Stopping heartbeat thread for server: {server_name}", flush=True)
                         return # IS IT OKAY TO RETURN HERE?                
                 
-                # await session.close()
-                # print("heartbeat: Closing session!")
-                # break
+
 
             # print("heartbeat: Closing session and sleeping!")
             # session.close()
@@ -329,7 +365,6 @@ class HeartBeat(threading.Thread):
 
     def config_server(self, server_name, serv_to_shard):
         
-        # lb = self._lb
         shards_for_server = serv_to_shard[server_name]
         
         # send the config request to the server
@@ -355,45 +390,33 @@ class HeartBeat(threading.Thread):
         for shard_id in shards_for_server:
 
             data_copied = False
+
+            # find the primary server for the shard
+            self.MapT_dict_lock.acquire_reader()
+            primary_server = self.MapT_dict[shard_id][0]
+            self.MapT_dict_lock.release_reader()
             
-            # find which other servers have the same shard
+            if primary_server == server_name:
+                print(f"heartbeat: <Error> Cannot copy data for shard {shard_id} as this server is itself the primary server for the shard!", flush=True)
+                return 500, f"Internal Server Error: Cannot copy data for shard {shard_id} as this server is itself the primary server for the shard!"
             
-            ## NEED TO CHANGE: DATA WILL BE ALWAYS COPIED ONLY FROM THE PRIMARY SERVER FOR A SHARD
-            servers = lb.list_shard_servers(shard_id)
+            elif primary_server == "":
+                print(f"heartbeat: <Error> Cannot copy data for shard {shard_id} as the primary server for the shard is not available!", flush=True)
+                return 500, f"Internal Server Error: Cannot copy data for shard {shard_id} as the primary server for the shard is not available!"
             
-            
-            if server_name in servers:
-                servers.remove(server_name)
-            
-            # get the data from the existing server
-            payload = {
-                "shards": [shard_id]
-            }
-            
-            for server in servers:
-                
-                # get the data from the existing server using the copy endpoint
-                status, response = synchronous_communicate_with_server(server, "copy", payload)
-                # print(f"Server {server} response: {response}", flush=True)
+            else:
+                payload = {
+                    "shards": [shard_id]
+                }
+                status, response = synchronous_communicate_with_server(primary_server, "copy", payload)
                 if status != 200:
-                    print(f"heartbeat: Error in copying {shard_id} data from server {server} to server {server_name}\nError: {response.get('message', 'Unknown error')}", flush=True)
-                    continue
+                    print(f"heartbeat: Error in copying {shard_id} data from server {primary_server} to server {server_name}\nError: {response.get('message', 'Unknown error')}", flush=True)
+                    return status, response.get('message', f"Error in copying {shard_id} data from server {primary_server} to server {server_name}")
                 else:
                     shard_data_copy[shard_id] = response[shard_id]
-                    # print("Response shard data: ", response[shard_id], flush=True)
                     data_copied = True
-                    break
-                
-            if not data_copied:
-                print(f"heartbeat: Could not get a copy of {shard_id} data from any active server", flush=True)
-                return 500, f"Internal Server Error: Could not get a copy of {shard_id} data from any active server"
             
-        # send the copied data to the new server for all shards in parallel
-        # tasks = []
-        # for shard_id in shard_data_copy.keys():
-            # print(f"{shard_id}: {shard_data_copy[shard_id]}", flush=True)
-        
-        rollback = False
+        # wrote the copied data to the new server
         for shard_id in shard_data_copy.keys():
             
             # if shard_data_copy[shard_id] is an empty list, then skip writing the data to the server 
@@ -404,53 +427,24 @@ class HeartBeat(threading.Thread):
             
             write_payload = {
                 "shard": shard_id,
-                "curr_idx": 0,
+                # "curr_idx": 0,
                 "data": shard_data_copy[shard_id]
             }
             # tasks.append(communicate_with_server(server_name, "write", write_payload))
             status, response = synchronous_communicate_with_server(server_name, "write", write_payload)
             if status != 200:
                 print(f"heartbeat: Error in writing {shard_id} data to server {server_name}\nError: {response.get('message', 'Unknown error')}", flush=True)
-                rollback = True
-                break
-            else:
-                print(f"heartbeat: Successfully written (uncommitted) {shard_id} data to server {server_name}", flush=True)
-            
-            
-            
-        # results = await asyncio.gather(*tasks)        
-        # for (status, response), shard_id in zip(results, shard_data_copy.keys()):
-        #     if status != 200:
-        #         print(f"heartbeat: Error in writing {shard_id} data to server {server_name}\nError: {response.get('message', 'Unknown error')}", flush=True)
-        #         rollback = True
+
+                return 400, f"Error in writing {shard_id} data to server {server_name}"
                 
-        #         # return status, response.get('message', f"Error in writing {shard_id} data to server {server_name}")
-        #     else:
-        #         print(f"heartbeat: Successfully written (uncommitted) {shard_id} data to server {server_name}", flush=True)
-                
-        if rollback:
-            # rollback the server to the previous state
-            print(f"heartbeat: Rolling back server {server_name} to previous state", flush=True)
-            status, response = synchronous_communicate_with_server(server_name, "rollback")
-            if status != 200:
-                print(f"heartbeat: Error in rolling back server {server_name}\nError: {response.get('message', 'Unknown error')}", flush=True)
-                print(f"heartbeat: <Error> Inconsistent state of database! Server {server_name} is in an inconsistent state!", flush=True)
-                return status, response.get('message', f"Error in rolling back server {server_name}")
             else:
-                print(f"heartbeat: Server {server_name} rolled back successfully!", flush=True)
-                return 400, "Server rolled back successfully to initial state"
+                print(f"heartbeat: Successfully written {shard_id} data to server {server_name}", flush=True)
+           
+        return 200, "Server reconfigured successfully with all the data!"    
             
-        # commit the server
-        else:
-            print(f"heartbeat: Committing server {server_name}", flush=True)
-            status, response = synchronous_communicate_with_server(server_name, "commit")
-            if status != 200:
-                print(f"heartbeat: Error in committing server {server_name}\nError: {response.get('message', 'Unknown error')}", flush=True)
-                print(f"heartbeat: <Error> Inconsistent state of database! Server {server_name} is in an inconsistent state!", flush=True)
-                return status, response.get('message', f"Error in committing server {server_name}")
-            else:
-                print(f"heartbeat: Server {server_name} committed successfully!", flush=True)
-                return 200, "Server committed successfully"
+
+            
+
                 
             
 

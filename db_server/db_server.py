@@ -117,128 +117,6 @@ async def heartbeat(request):
         print(f"DB_Server: Error in heartbeat endpoint: {str(e)}")
         return web.json_response({"error": "Internal Server Error"}, status=500)
     
-    
-async def init_servers_hb(request):
-    global hb_threads
-    
-    try:
-        request_json = await request.json()
-        if isinstance(request_json, str):
-            request_json = json.loads(request_json)
-            
-        if 'num_servers' not in request_json:
-            response_json = {
-                "message": f"<Error> Invalid payload format: 'num_servers' field missing in request",
-                "status": "failure"
-            }
-            return web.json_response(response_json, status=400)    
-        
-        if 'servers' not in request_json:
-            response_json = {
-                "message": f"<Error> Invalid payload format: 'servers' field missing in request",
-                "status": "failure"
-            }
-            return web.json_response(response_json, status=400)
-        
-        servers = request_json.get('servers', [])
-        num_servers = request_json['num_servers']
-        
-        if num_servers != len(servers):
-            response_json = {
-                "message": f"<Error> Invalid payload format: 'num_servers' field and no of servers in 'servers' do not match",
-                "status": "failure"
-            }
-            return web.json_response(response_json, status=400)        
-        
-        servers = set(servers)
-        servers = list(servers)
-        num_servers = len(servers)
-        
-        for server in servers:
-            t1 = HeartBeat(server, StudT_schema)
-            hb_threads[server] = t1
-            t1.start()
-            
-            
-        response_json = {
-            "message": f"Started Heartbeat threads for servers: {', '.join(servers)}",
-            "status": "success"
-        }
-        return web.json_response(response_json, status=200)
-            
-    except Exception as e:
-        print(f"DB_Server: Error in init_servers_hb endpoint: {str(e)}")
-        response_json = {
-            "message": f"<Error>: {str(e)}",
-            "status": "failure"
-        }
-        return web.json_response(response_json, status=400)
-
-async def stop_servers_hb(request):
-    global hb_threads
-    
-    try:
-        request_json = await request.json()
-        if isinstance(request_json, str):
-            request_json = json.loads(request_json)
-            
-        if 'num_servers' not in request_json:
-            response_json = {
-                "message": f"<Error> Invalid payload format: 'num_servers' field missing in request",
-                "status": "failure"
-            }
-            return web.json_response(response_json, status=400)    
-        
-        if 'servers' not in request_json:
-            response_json = {
-                "message": f"<Error> Invalid payload format: 'servers' field missing in request",
-                "status": "failure"
-            }
-            return web.json_response(response_json, status=400)
-        
-        servers = request_json.get('servers', [])
-        num_servers = request_json['num_servers']
-        
-        if num_servers != len(servers):
-            response_json = {
-                "message": f"<Error> Invalid payload format: 'num_servers' field and no of servers in 'servers' do not match",
-                "status": "failure"
-            }
-            return web.json_response(response_json, status=400)        
-             
-        servers = set(servers)
-        servers = list(servers)
-        num_servers = len(servers)
-                            
-        for server in servers:
-            if server in hb_threads:
-                hb_threads[server].stop()
-                del hb_threads[server]
-                
-                # kill_server_cntnr(server)
-                
-            else:
-                print(f"DB_Server: Error in stop_servers_hb endpoint: {server} not found in the list of servers")
-                response_json = {
-                    "message": f"<Error>: {server} not found in the list of active servers",
-                    "status": "failure"
-                }
-                return web.json_response(response_json, status=400)
-        
-        response_json = {
-            "message": f"Stopped Heartbeat threads for servers: {', '.join(servers)}",
-            "status": "success"
-        }    
-        return web.json_response(response_json, status=200)
-    
-    except Exception as e:
-        print(f"DB_Server: Error in stop_servers_hb endpoint: {str(e)}")
-        response_json = {
-            "message": f"<Error>: {str(e)}",
-            "status": "failure"
-        }
-        return web.json_response(response_json, status=400)
-
 
 async def list_active_hb_threads(request):
     global hb_threads
@@ -429,11 +307,21 @@ async def not_found(request):
 
 
 async def config_change_handler(request):
+    global hb_threads
+    global MapT_dict
+    global MapT_dict_lock
     
     try:
         request_json = await request.json()
         if isinstance(request_json, str):
             request_json = json.loads(request_json)
+
+        if 'num_servers' not in request_json:
+            response_json = {
+                "message": f"<Error> Invalid payload format: 'num_servers' field missing in request",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)     
             
         if 'action' not in request_json:
             response_json = {
@@ -442,9 +330,10 @@ async def config_change_handler(request):
             }
             return web.json_response(response_json, status=400)
         
-        action = request_json['action']
+        action = str(request_json['action'])
         
-        if action == "add_servers":
+        if action.startswith("add"):
+            
             if 'servers_to_shard' not in request_json:
                 response_json = {
                     "message": f"<Error> Invalid payload format: 'servers_to_shard' field missing in request",
@@ -453,13 +342,24 @@ async def config_change_handler(request):
                 return web.json_response(response_json, status=400)
             
             servers_to_shard = request_json['servers_to_shard']
-            
+            num_servers = request_json['num_servers']
+
             if not isinstance(servers_to_shard, dict):
                 response_json = {
                     "message": f"<Error> Invalid payload format: 'servers_to_shard' field should be a dictionary",
                     "status": "failure"
                 }
-                return web.json_response(response_json, status=400)
+                return web.json_response(response_json, status=400)            
+            
+            if num_servers != len(list(servers_to_shard.keys())):
+                response_json = {
+                    "message": f"<Error> Invalid payload format: 'num_servers' field and no of servers in 'servers_to_shard' do not match",
+                    "status": "failure"
+                }
+                return web.json_response(response_json, status=400)              
+            
+            
+            # update the MapT_dict with the new servers
             
             shards_to_servers = {}
             for server, shards in servers_to_shard.items():
@@ -487,9 +387,22 @@ async def config_change_handler(request):
                     
             MapT_dict_lock.release_writer()
             
-            return web.json_response("status: success", status=200)
+            # start the heartbeat threads for the new servers
+            servers = list(servers_to_shard.keys())
+            
+            for server in servers:
+                t1 = HeartBeat(server, StudT_schema, MapT_dict, MapT_dict_lock)
+                hb_threads[server] = t1
+                t1.start()
+            
+            response_json = {
+                "message": f"Started Heartbeat threads for servers: {', '.join(servers)} and updated MapT_dict",
+                "status": "success"
+            }
+            return web.json_response(response_json, status=200)
         
-        if action == "remove_servers":
+        elif action.startswith("remove"):         
+            
             if 'servers' not in request_json:
                 response_json = {
                     "message": f"<Error> Invalid payload format: 'servers' field missing in request",
@@ -497,15 +410,22 @@ async def config_change_handler(request):
                 }
                 return web.json_response(response_json, status=400)
             
-            servers_rm = request_json['servers']
-            servers_rm = list(set(servers_rm))
-            
+            servers_rm = request_json.get('servers', [])
+            num_servers = request_json['num_servers']
+
             if not isinstance(servers_rm, list):
                 response_json = {
                     "message": f"<Error> Invalid payload format: 'servers' field should be a list",
                     "status": "failure"
                 }
                 return web.json_response(response_json, status=400)
+            
+            if num_servers != len(servers):
+                response_json = {
+                    "message": f"<Error> Invalid payload format: 'num_servers' field and no of servers in 'servers' do not match",
+                    "status": "failure"
+                }
+                return web.json_response(response_json, status=400)  
             
             MapT_dict_lock.acquire_writer()
             for shard, servers in MapT_dict.items():
@@ -515,13 +435,23 @@ async def config_change_handler(request):
                 # remove first the servers from secondary servers
                 secondary_servers = list(set(secondary_servers) - set(servers_rm))
                 
+                
                 # now check if primary server is in the list of servers to remove
                 if primary_server in servers_rm:
                     if len(secondary_servers) > 0:
                         
                         ### FUNCTION CALL TO ALGORITHM TO ELECT NEW PRIMARY SERVER
                         primary_server = elect_primary_server(shard, secondary_servers)
-                        secondary_servers.remove(primary_server)
+                        if primary_server != "":
+                            secondary_servers.remove(primary_server)
+                        
+                        else:
+                            print(f"DB_Server: Error in config_change_handler endpoint: Couldn't elect new primary server for shard {shard}")
+                            response_json = {
+                                "message": f"<Error>: Couldn't remove the servers from the system",
+                                "status": "failure"
+                            }
+                            return web.json_response(response_json, status=400)
                         
                         # update the MapT_dict
                         MapT_dict[shard] = [primary_server, secondary_servers]
@@ -536,9 +466,32 @@ async def config_change_handler(request):
                         
             MapT_dict_lock.release_writer()
             
-            return web.json_response("status: success", status=200)
+            servers = list(set(servers_rm))
+            num_servers = len(servers)
+            
+            for server in servers:
+                if server in hb_threads:
+                    hb_threads[server].stop()
+                    del hb_threads[server]
+                    
+                    # kill_server_cntnr(server)
+                    
+                else:
+                    print(f"DB_Server: Error in config_change_handler endpoint: {server} not found in the list of servers")
+                    response_json = {
+                        "message": f"<Error>: {server} not found in the list of active servers",
+                        "status": "failure"
+                    }
+                    return web.json_response(response_json, status=400)
+            
+            
+            response_json = {
+                "message": f"Stopped Hb threads for servers: {', '.join(servers)} and updated MapT_dict",
+                "status": "success"
+            }
+            
+            return web.json_response(response_json, status=200)
         
-                        
     except Exception as e:
         print(f"DB_Server: Error in config_change_handler endpoint: {str(e)}")
         response_json = {
@@ -547,7 +500,50 @@ async def config_change_handler(request):
         }
         return web.json_response(response_json, status=400)
                  
-         
+async def get_primary_server(request):
+    global MapT_dict
+    global MapT_dict_lock
+    
+    try:
+        request_json = await request.json()
+        
+        if 'shard' not in request_json:
+            response_json = {
+                "message": f"<Error> Invalid payload format: 'shard' field missing in request",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
+        
+        shard = request_json['shard']
+        
+        MapT_dict_lock.acquire_reader()
+        if shard not in MapT_dict:
+            MapT_dict_lock.release_reader()
+            response_json = {
+                "message": f"<Error> Shard {shard} not found in the database",
+                "status": "failure"
+            }
+            return web.json_response(response_json, status=400)
+        
+        primary_server = MapT_dict[shard][0]
+        secondary_servers = MapT_dict[shard][1]
+        MapT_dict_lock.release_reader()
+        
+        response_json = {
+            "shard": shard,
+            "primary_server": primary_server,
+            "secondary_servers": secondary_servers,
+            # "status": "success"
+        }
+        return web.json_response(response_json, status=200)
+    
+    except Exception as e:
+        print(f"DB_Server: Error in get_primary_server endpoint: {str(e)}")
+        response_json = {
+            "message": f"<Error>: {str(e)}",
+            "status": "failure"
+        }
+        return web.json_response(response_json, status=400)          
                     
 
 # Define the main function to run the web server
@@ -569,11 +565,11 @@ def run_server():
     app.router.add_post('/clear_table', clear_table)
     
     
-    app.router.add_post('/init_servers_hb', init_servers_hb)
-    app.router.add_post('/stop_servers_hb', stop_servers_hb)
+    # app.router.add_post('/init_servers_hb', init_servers_hb)
+    # app.router.add_post('/stop_servers_hb', stop_servers_hb)
     app.router.add_get('/list_active_hb_threads', list_active_hb_threads)
-    
     app.router.add_post('/config_change', config_change_handler)
+    app.router.add_post('/get_primary_server', get_primary_server)
 
     # Add a catch-all route for any other endpoint, which returns a 400 Bad Request
     app.router.add_route('*', '/{tail:.*}', not_found)
@@ -590,3 +586,132 @@ def run_server():
 if __name__ == '__main__':
     # Run the web server
     run_server()
+
+
+
+
+
+
+
+
+    
+# async def init_servers_hb(request):
+#     global hb_threads
+    
+#     try:
+#         request_json = await request.json()
+#         if isinstance(request_json, str):
+#             request_json = json.loads(request_json)
+            
+#         if 'num_servers' not in request_json:
+#             response_json = {
+#                 "message": f"<Error> Invalid payload format: 'num_servers' field missing in request",
+#                 "status": "failure"
+#             }
+#             return web.json_response(response_json, status=400)    
+        
+#         if 'servers' not in request_json:
+#             response_json = {
+#                 "message": f"<Error> Invalid payload format: 'servers' field missing in request",
+#                 "status": "failure"
+#             }
+#             return web.json_response(response_json, status=400)
+        
+#         servers = request_json.get('servers', [])
+#         num_servers = request_json['num_servers']
+        
+#         if num_servers != len(servers):
+#             response_json = {
+#                 "message": f"<Error> Invalid payload format: 'num_servers' field and no of servers in 'servers' do not match",
+#                 "status": "failure"
+#             }
+#             return web.json_response(response_json, status=400)        
+        
+#         servers = set(servers)
+#         servers = list(servers)
+#         num_servers = len(servers)
+        
+#         for server in servers:
+#             t1 = HeartBeat(server, StudT_schema, MapT_dict, MapT_dict_lock)
+#             hb_threads[server] = t1
+#             t1.start()
+            
+            
+#         response_json = {
+#             "message": f"Started Heartbeat threads for servers: {', '.join(servers)}",
+#             "status": "success"
+#         }
+#         return web.json_response(response_json, status=200)
+            
+#     except Exception as e:
+#         print(f"DB_Server: Error in init_servers_hb endpoint: {str(e)}")
+#         response_json = {
+#             "message": f"<Error>: {str(e)}",
+#             "status": "failure"
+#         }
+#         return web.json_response(response_json, status=400)
+
+# async def stop_servers_hb(request):
+#     global hb_threads
+    
+#     try:
+#         request_json = await request.json()
+#         if isinstance(request_json, str):
+#             request_json = json.loads(request_json)
+            
+#         if 'num_servers' not in request_json:
+#             response_json = {
+#                 "message": f"<Error> Invalid payload format: 'num_servers' field missing in request",
+#                 "status": "failure"
+#             }
+#             return web.json_response(response_json, status=400)    
+        
+#         if 'servers' not in request_json:
+#             response_json = {
+#                 "message": f"<Error> Invalid payload format: 'servers' field missing in request",
+#                 "status": "failure"
+#             }
+#             return web.json_response(response_json, status=400)
+        
+#         servers = request_json.get('servers', [])
+#         num_servers = request_json['num_servers']
+        
+#         if num_servers != len(servers):
+#             response_json = {
+#                 "message": f"<Error> Invalid payload format: 'num_servers' field and no of servers in 'servers' do not match",
+#                 "status": "failure"
+#             }
+#             return web.json_response(response_json, status=400)        
+             
+#         servers = set(servers)
+#         servers = list(servers)
+#         num_servers = len(servers)
+                            
+#         for server in servers:
+#             if server in hb_threads:
+#                 hb_threads[server].stop()
+#                 del hb_threads[server]
+                
+#                 # kill_server_cntnr(server)
+                
+#             else:
+#                 print(f"DB_Server: Error in stop_servers_hb endpoint: {server} not found in the list of servers")
+#                 response_json = {
+#                     "message": f"<Error>: {server} not found in the list of active servers",
+#                     "status": "failure"
+#                 }
+#                 return web.json_response(response_json, status=400)
+        servers_to_shard
+#         response_json = {
+#             "message": f"Stopped Heartbeat threads for servers: {', '.join(servers)}",
+#             "status": "success"
+#         }    
+#         return web.json_response(response_json, status=200)
+    
+#     except Exception as e:
+#         print(f"DB_Server: Error in stop_servers_hb endpoint: {str(e)}")
+#         response_json = {
+#             "message": f"<Error>: {str(e)}",
+#             "status": "failure"
+#         }
+#         return web.json_response(response_json, status=400)

@@ -99,6 +99,7 @@ class Manager:
             #     tables = json_data
             
             database_copy = {}
+            database_copy['latest_tx_ids'] = {}
             for table_name in json_data['shards']:   
                 
                 table_rows,status = self.sql_handler.Get_table_rows(table_name) 
@@ -106,6 +107,11 @@ class Manager:
                 len_row = len(table_rows[0]) if table_rows else 0
                 dict_table_rows = [{self.schema[i-1]: row[i] for i in range(1, len_row)} for row in table_rows]
                 database_copy[table_name] = dict_table_rows
+                lock = self.log_file_locks[table_name]
+                lock.acquire_reader()
+                latest_tx_id = self.last_tx_ids[table_name]
+                lock.release_reader()
+                database_copy['latest_tx_ids'][table_name] = latest_tx_id
             
                 if status != 200:
                     message = table_rows

@@ -29,7 +29,7 @@ async def communicate_with_server(server, endpoint, payload={}):
             request_url = f'http://{server}:{SERVER_PORT}/{endpoint}'
             
             if endpoint == "latest_tx_id":
-                async with session.get(request_url) as response:
+                async with session.post(request_url, json=payload) as response:
                     return response.status, await response.json()
                 
             else:
@@ -390,7 +390,7 @@ async def config_change_handler(request):
             servers = list(servers_to_shard.keys())
             
             for server in servers:
-                t1 = HeartBeat(server, StudT_schema, MapT_dict, MapT_dict_lock, elect_primary_server=elect_primary_server)
+                t1 = HeartBeat(server, StudT_schema, MapT_dict, MapT_dict_lock)
                 hb_threads[server] = t1
                 t1.start()
             
@@ -440,7 +440,7 @@ async def config_change_handler(request):
                     if len(secondary_servers) > 0:
                         
                         ### FUNCTION CALL TO ALGORITHM TO ELECT NEW PRIMARY SERVER
-                        primary_server = elect_primary_server(shard, secondary_servers)
+                        primary_server = await elect_primary_server(shard, secondary_servers)
                         if primary_server != "":
                             secondary_servers.remove(primary_server)
                         

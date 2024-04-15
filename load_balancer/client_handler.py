@@ -1649,6 +1649,9 @@ async def status_handler(request):
             return 500, {"message": f"Internal Server Error: The requested data could not be written"}
         
         shard["primary_server"] = primary_server
+        secondary_servers = response.get("secondary_servers", [])
+        shard["secondary_servers"] = secondary_servers
+        
     response_json = {
         "message": {
             "N": len(servers),

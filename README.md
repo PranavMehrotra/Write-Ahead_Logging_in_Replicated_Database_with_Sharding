@@ -1,17 +1,17 @@
 <font size=3>
 
 # Assignment-2 Distributed Systems
-This repository contains the code for the Assignment-2 of Distributed Systems(CS60002) course of Spring, 2024.
+This repository contains the code for the Assignment-3 of Distributed Systems(CS60002) course of Spring, 2024.
 
-# Implementing a Scalable Database with Sharding
+# Implementing a Write-Ahead Logging for consistency in Replicated Database with Sharding
 <p align="center">
       <img src="images/problem.png" width="90%"/><br><strong>Fig.1: Overview</strong>
 </p>
 
 # Table of Contents
 
-- [Assignment-2 Distributed Systems](#assignment-2-distributed-systems)
-- [Implementing a Scalable Database with Sharding](#implementing-a-scalable-database-with-sharding)
+- [Assignment-3 Distributed Systems](#assignment-3-distributed-systems)
+- [Implementing a Write-Ahead Logging for consistency in Replicated Database](#implementing-a-write-ahead-logging-for-consistency-in-replicated-database)
 - [Table of Contents](#table-of-contents)
 - [Group Details](#group-details)
 - [Prerequisite](#prerequisite)
@@ -43,7 +43,7 @@ This repository contains the code for the Assignment-2 of Distributed Systems(CS
 
 
 # Group Details
-Repo Link: https://github.com/PranavMehrotra/A2_Distributed_Systems 
+Repo Link: https://github.com/PranavMehrotra/A3_Distributed_Systems 
 1. Pranav Mehrotra (20CS10085)
 2. Saransh Sharma (20CS30065)
 3. Pranav Nyati (20CS30037)

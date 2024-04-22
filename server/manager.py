@@ -248,8 +248,8 @@ class Manager:
                 # WAL
                 lock = self.log_file_locks[tablename]
                 lock.acquire_writer()
-                self.last_tx_ids[tablename] += 1
-                tx_id = self.last_tx_ids[tablename]
+                # self.last_tx_ids[tablename] += 1
+                tx_id = self.last_tx_ids[tablename] + 1
                 log_file = self.log_files[tablename]
                 self.write_ahead_logging(log_file, tablename, tx_id, WRITE_STR_LOG, commit=False, data=f"[{row_str}]")
                 lock.release_writer()
@@ -283,6 +283,7 @@ class Manager:
                     # WAL
                     lock.acquire_writer()
                     self.write_ahead_logging(log_file, tablename, tx_id, WRITE_STR_LOG, commit=True)
+                    self.last_tx_ids[tablename] = tx_id
                     lock.release_writer()
 
                     # Refresh the failed servers
@@ -375,8 +376,8 @@ class Manager:
                 # WAL
                 lock = self.log_file_locks[tablename]
                 lock.acquire_writer()
-                self.last_tx_ids[tablename] += 1
-                tx_id = self.last_tx_ids[tablename]
+                # self.last_tx_ids[tablename] += 1
+                tx_id = self.last_tx_ids[tablename] + 1
                 log_file = self.log_files[tablename]
                 self.write_ahead_logging(log_file, tablename, tx_id, UPDATE_STR_LOG, commit=False, data=f"{stud_id}:{data}")
                 lock.release_writer()
@@ -411,6 +412,7 @@ class Manager:
                     # WAL
                     lock.acquire_writer()
                     self.write_ahead_logging(log_file, tablename, tx_id, UPDATE_STR_LOG, commit=True)
+                    self.last_tx_ids[tablename] = tx_id
                     lock.release_writer()
 
                     # Refresh the failed servers
@@ -457,6 +459,7 @@ class Manager:
                 # WAL
                 lock.acquire_writer()
                 self.write_ahead_logging(log_file, tablename, tx_id, UPDATE_STR_LOG, commit=True)
+                self.last_tx_ids[tablename] = tx_id
                 lock.release_writer()
 
                 return "Data entry updated", 200
@@ -498,8 +501,8 @@ class Manager:
                 # WAL
                 lock = self.log_file_locks[tablename]
                 lock.acquire_writer()
-                self.last_tx_ids[tablename] += 1
-                tx_id = self.last_tx_ids[tablename]
+                # self.last_tx_ids[tablename] += 1
+                tx_id = self.last_tx_ids[tablename] + 1
                 log_file = self.log_files[tablename]
                 self.write_ahead_logging(log_file, tablename, tx_id, DELETE_STR_LOG, commit=False, data=f"{stud_id}")
                 lock.release_writer()
@@ -533,6 +536,7 @@ class Manager:
                     # WAL
                     lock.acquire_writer()
                     self.write_ahead_logging(log_file, tablename, tx_id, DELETE_STR_LOG, commit=True)
+                    self.last_tx_ids[tablename] = tx_id
                     lock.release_writer()
 
                     # Refresh the failed servers
@@ -579,6 +583,7 @@ class Manager:
                 # WAL
                 lock.acquire_writer()
                 self.write_ahead_logging(log_file, tablename, tx_id, DELETE_STR_LOG, commit=True)
+                self.last_tx_ids[tablename] = tx_id
                 lock.release_writer()
 
                 return "Data entry deleted", 200
@@ -669,9 +674,9 @@ class Manager:
             # WAL
             lock = self.log_file_locks[tablename]
             lock.acquire_writer()
-            self.last_tx_ids[tablename] = latest_tx_id
             log_file = self.log_files[tablename]
             self.write_ahead_logging(log_file, tablename, latest_tx_id, WRITE_STR_LOG, commit=True)
+            self.last_tx_ids[tablename] = latest_tx_id
             lock.release_writer()
 
             return "Table refreshed", 200

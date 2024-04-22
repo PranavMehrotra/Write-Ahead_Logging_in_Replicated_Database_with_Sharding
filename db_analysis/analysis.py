@@ -18,7 +18,7 @@ def generate_random_string(length=4):
     return "S_" + ''.join(random.choice(letters) for _ in range(length))
 
 def generate_random_range():
-    low = random.randint(0, STUD_ID_MAX)
+    low = random.randint(0, STUD_ID_MAX-4500)
     # high = random.randint(low, low + 1000)
     high = random.randint(low, low + 4000)
     return low, high
@@ -212,7 +212,10 @@ async def send_requests(
                 # num_bundled_requests reqs, each of 100 data points
                 # tasks = [write_shard(sem, session, {"data": [{"Stud_id": ids[i*100 + j], "Stud_name": generate_random_string(), "Stud_marks": random.randint(0, 100)} for j in range(100)]}) for i in range(num_bundled_requests)]
                 # num_requests reqs, with 1 data point each
-                tasks = [write_shard(sem, session, {"data": [{"Stud_id": id, "Stud_name": generate_random_string(), "Stud_marks": random.randint(0, 100)}]}) for id in ids]
+                data = [{"data": [{"Stud_id": id, "Stud_name": generate_random_string(), "Stud_marks": random.randint(0, 100)}]} for id in ids]
+                print("Data to be written: ")
+                pprint(data)
+                tasks = [write_shard(sem, session, data[i]) for i in range(len(data))]
                 
                 # FOR Loop
                 # tasks = [{"data": [{"Stud_id": id, "Stud_name": generate_random_string(), "Stud_marks": random.randint(0, 100)}]} for id in ids]
@@ -221,8 +224,8 @@ async def send_requests(
             elif type == "read":
                 for i in range(num_requests):
                     low,high = generate_random_range()
-                    low = 0
-                    high = STUD_ID_MAX
+                    # low = 0
+                    # high = STUD_ID_MAX
                     read_json = {
                         "Stud_id":{ "low": low, "high": high}
                     }

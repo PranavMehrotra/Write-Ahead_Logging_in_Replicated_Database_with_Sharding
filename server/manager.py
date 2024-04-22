@@ -328,6 +328,7 @@ class Manager:
                 # WAL
                 lock.acquire_writer()
                 self.write_ahead_logging(log_file, tablename, tx_id, WRITE_STR_LOG, commit=True)
+                self.last_tx_ids[tablename] = tx_id
                 lock.release_writer()
 
                 return "Data entries added", 200, valid_idx+num_entry

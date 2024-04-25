@@ -127,15 +127,20 @@ It is advisable to run this command before executing the main code to eliminate 
 
 # Design Choices
 <ol>
-<li> Every server container maintains both a SQL database to store the shard data and a server application to handle config/read/write/delete operations. So, the server container is a combination of a SQL database and a server application. It handles the requests/queries from the load balancer and updates the data in the SQL database accordingly, as well as sends the response back to the load balancer. </li>
-<li> When executing the /add endpoint, users may provide existing server hostnames as part of the request. In such cases, the load balancer takes a proactive approach to ensure that the specified num_add parameter is honored. Even if the user supplies hostnames that already exist in the system, the load balancer will ignore already existing hostnames and generate new hostnames for additional servers to fulfill the exact count specified by num_add.
-<li> When executing the /rm endpoint, users may provide hostnames for removal. To ensure the specified number of servers to be removed is consistently achieved, the load balancer employs a strategy wherein, if the user-provided hostname doesn't exist in the system, it randomly selects and removes a server hostname from the existing set.
-<li> Every server is equipped with a heartbeat thread that sends a heartbeat message every 0.2 seconds. If no heartbeat is detected for two consecutive attempts, the server is declared dead, triggering the spawning of a new server. This mechanism prevents premature declarations of server death due to network fluctuations, ensuring stability in the system.</li>
-<li> The load balancer maintains two dictionaries: one ShardT Schema (which maps the lowest data entry index to its corresponding shard id) and one MapT schema (which maps the shard id to the list of server ids that contain replicas of that shard). Whenever there is a change in the server configuration (init/add/removal), or an update (write/delete) in a shard data, the load balancer updates these dictionaries to reflect the new changes accurately.</li>
-<li> Metadata SQL server: In addition to the dictionaries maintained in the load balancer, we also deploy a metadata server that also stores the ShardT and MapT schemas in a SQL database. This server is used to have a backup of the metadata in case of a load balancer failure (Note that it does not store the actual shard data, but only these two mappings). 
-We employ a Checkpointing mechanism that periodically updates the ShardT and MapT schemas in the metadata server by querying these mappings from the load balancer (every 30 seconds). This ensures that the metadata server is up-to-date with the latest mappings, even if the load balancer fails. </li> We used a periodic checkpoint mechanism rather than an immediate update to avoid frequent updates to the metadata server, which could lead to performance degradation, as then the metadata server would need to be updated for every write/delete operation/service configuration change. </li>
-<li> Recovery mechanism for servers: We implement a recovery mechanism for servers using the heartbeat thread. If a server crashes, the heartbeat thread detects it, respawns a new server container, and reconfigures it with the correct database schema. Next, the heartbeat thread copies the data for the shards (which were maintained by the crashed server) from the the shard replicas in the other servers and repopulates the new server. This ensures that the new server is up-to-date with the latest data and is ready to serve requests. </li>
+<li> Initialization of heartbeat threads: When the load_balancer receives a client request for adding or removing servers or init_servers request, the load_balancer sends a request to the shard_manager with the information of the severs to be added/removed. The shard manager initializes the heartbeat threads for each of the servers which in turn monitor each server.</li>
+
+<li> In case of an init or an add server request, for each new shard that is added in the request, the Shard Manager selects one of the servers as primary server randomly. In case of a remove server request, for each removed server, if it was the primary server for some of its shards, then for each of those shards, the Shard Manager runs a mechanism for electing a new primary server from amongst the secondary servers corresponding to the shard. The mechanism selects one of the servers that have the latest (most updated) data as the new primary server, which it gets to know by the latest transaction ids received by network calls to each of the secondary servers.</li>
+
+<li> In the event when a server crashes or stops, the heartbeat thread of that server (mainitained by the Shard_Manager) handles it through a crash recovery mechanism. It first runs the mechanism for electing new primary server (as discussed in point 2) for each of the shards for which the crashed server was previously the primary server. It then reinstantiates the new server and configures it with the appropriate schema. Next, for each shard that the server was maintaining, the heartbeat thread recovers the data from the primary server for that shard. When data is copied for all shards, the server has recovered and is up and running.</li>
+
+<li> The log file maintains a record of transaction IDs, types (write, update, or delete), and associated data exclusively upon the receipt of incoming requests. Data is logged at this initial stage and not upon the fulfillment of the request by the database server or when the request is committed.
+</li>
+
+<img src="images/log_file.jpg" style="border: 2px solid  white;">
+
+
 </ol>
+
 
 # Troubleshooting
 

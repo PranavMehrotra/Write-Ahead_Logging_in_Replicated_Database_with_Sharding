@@ -177,10 +177,10 @@ Remove all running container: docker rm $(docker ps -a -q)
   # initialise database container with default configuration
    cd db_analysis/
    python p1.py --type init
-   python p1.py --type status       # check status
+   python p1.py --type status       
 
   # run analysis file
-   python p1.py --type write --nreqs 10000        # should take 5-6 mins
+   python p1.py --type write --nreqs 10000        
    python p1.py --type read --nreqs 10000
 
 ```
@@ -198,13 +198,13 @@ Remove all running container: docker rm $(docker ps -a -q)
 
         No of successful requests: 10000/10000
         No of failed requests: 0/10000
-        Time taken to send 10000 requests: 188.25956535339355 seconds
+        Time taken to send 10000 requests: 171.6880922317505 seconds
 
     - Request Type: read
 
         No of successful requests: 10000/10000
         No of failed requests: 0/10000
-        Time taken to send 10000 requests: 60.557310581207275 seconds
+        Time taken to send 10000 requests: 44.47232532501221 seconds
   ```
 
 
@@ -215,10 +215,10 @@ Remove all running container: docker rm $(docker ps -a -q)
   # initialise database container with specific configuration
    cd db_analysis/
    python p2.py --type init         # initialise database
-   python p2.py --type status       # check status
+   python p2.py --type status       
 
   # run analysis file
-   python p2.py --type write --nreqs 10000        # should take 5-6 mins
+   python p2.py --type write --nreqs 10000        
    python p2.py --type read --nreqs 10000
 
 ```
@@ -255,11 +255,11 @@ The increased latency for write and read requests can be attributed to the incre
 ```
   # initialise database container with specific configuration
    cd db_analysis/
-   python p3.py --type init         # initialise database
-   python p3.py --type status       # check status
+   python p3.py --type init         
+   python p3.py --type status       
 
   # run analysis file
-   python p3.py --type write --nreqs 10000        # should take 7-8 mins
+   python p3.py --type write --nreqs 10000        
    python p3.py --type read --nreqs 10000
 
 ```
@@ -302,20 +302,20 @@ For write requests, an increase in the number of replicas to be edited overcomes
 ```
 # initialise database container with specific configuration
    cd db_analysis/
-   python p4.py --type init         # initialise database
-   python p4.py --type status       # check status
+   python p1.py --type init         # initialise database
+   python p1.py --type status       # check status
 
   # write/read requests
-   python p4.py --type write --nreqs 100        
-   python p4.py --type read --nreqs 100
+   python p1.py --type write --nreqs 100        
+   python p1.py --type read --nreqs 100
 
   # update/delete requests
-   python p4.py --type update       # updates a random db entry
-   python p4.py --type delete       # deletes a random entry from all involved replicas
+   python p1.py --type update       # updates a random db entry
+   python p1.py --type delete       # deletes a random entry from all involved replicas
 
   # add/remove servers
-   python p4.py --type add        # adds list of servers mentioned in script
-   python p4.py --type rm         # removes list of servers mentioned in script
+   python p1.py --type add        # adds list of servers mentioned in script
+   python p1.py --type rm         # removes list of servers mentioned in script
 ```
 
 ### Server Drop Analysis
@@ -325,8 +325,11 @@ For write requests, an increase in the number of replicas to be edited overcomes
 The initial server configuration consists of 6 servers (`Server0` to `Server5`), as shown in Fig.2.
 
 <p align="center">
-      <img src="images/before_stop_cntr.png" width="90%"/><br><strong>Fig.2: Initial Configuration</strong>
+      <img src="images/status.png" width="70%"/><br><strong>Fig.2: Initial Configuration</strong>
 </p>
+
+<b>Now, server1 is primary for 'sh1 ' and 'sh3', so we kill server 1</b>
+
 
 #### Server configuration after stopping container
 
@@ -342,31 +345,32 @@ The initial server configuration consists of 6 servers (`Server0` to `Server5`),
 ```
 
 <p align="center">
-      <img src="images/after_stop_cntr.png" width="90%"/><br><strong>Fig.3: Configuration just after stopping `Server5`</strong>
+      <img src="images/status_after_killing.png" width="70%"/><br><strong>Fig.3: Configuration just after stopping `Server5`</strong>
 </p>
 
-When `Server5` is stopped via `docker stop <container_id`, it is quickly respawned, as shown in Fig.3.
+<b>Now, server1 is primary for 'sh1 ' and 'sh3', so we kill server 1</b>
 
 #### Load-balancer side logs
 
-The server-shard mapping of the current configuration is as follows:
-
-
-```
-  'Server0': ['sh1', 'sh2']
-  'Server1': ['sh1', 'sh3']
-  'Server2': ['sh1', 'sh4']
-  'Server3': ['sh2', 'sh3']
-  'Server4': ['sh2', 'sh4']
-  'Server5': ['sh3', 'sh4']
-```
+Load balancer's  logs stating killing and restarting of server 1
 
 <p align="center">
-      <img src="images/lb_cntr_logs.png" width="90%"/><br><strong>Fig.4: Load-balancer logs showing the respawning of `Server5`</strong>
+      <img src="images/load_balancer.png" width="70%"/><br>
 </p>
 
+Shard Manager's logs stating killing and restarting of server 1
 
-As shown in Fig.5, after the heartbeat thread detects that `Server5` is down, it quickly respawns a new copy and copies the `sh3` and `sh4` contents from replicas in other servers to the same.
+<p align="center">
+      <img src="images/server_logs.png" width="70%"/><br>
+</p>
+
+docker ps indicating respawning server 1
+
+
+<p align="center">
+      <img src="images/docker.png" width="70%"/><br>
+</p>
+
 
 
 </font>

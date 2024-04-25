@@ -10,8 +10,8 @@ This repository contains the code for the Assignment-3 of Distributed Systems(CS
 
 # Table of Contents
 
-- [Assignment-3 Distributed Systems](#assignment-3-distributed-systems)
-- [Implementing a Write-Ahead Logging for consistency in Replicated Database](#implementing-a-write-ahead-logging-for-consistency-in-replicated-database)
+- [Assignment-2 Distributed Systems](#assignment-2-distributed-systems)
+- [Implementing a Write-Ahead Logging for consistency in Replicated Database with Sharding](#implementing-a-write-ahead-logging-for-consistency-in-replicated-database-with-sharding)
 - [Table of Contents](#table-of-contents)
 - [Group Details](#group-details)
 - [Prerequisite](#prerequisite)
@@ -328,7 +328,7 @@ The initial server configuration consists of 6 servers (`Server0` to `Server5`),
       <img src="images/status.png" width="70%"/><br><strong>Fig.2: Initial Configuration</strong>
 </p>
 
-<b>Now, server1 is primary for 'sh1 ' and 'sh3', so we kill server 1</b>
+<b>Now, Server1 is primary server for 'sh1 ' and 'sh3', so we kill Server 1</b>
 
 
 #### Server configuration after stopping container
@@ -345,10 +345,10 @@ The initial server configuration consists of 6 servers (`Server0` to `Server5`),
 ```
 
 <p align="center">
-      <img src="images/status_after_killing.png" width="70%"/><br><strong>Fig.3: Configuration just after stopping `Server5`</strong>
+      <img src="images/status_after_killing.png" width="70%"/><br><strong>Fig.3: Configuration just after stopping `Server1`</strong>
 </p>
 
-<b>Now, server1 is primary for 'sh1 ' and 'sh3', so we kill server 1</b>
+<b>We can observe that after crashing of Server 1, new primary servers have been elected for sh1 (Server 0 as the new primary server) and sh3 (Server5 as the new primary server) and Server 1 has become one of the secondary servers for sh1 and sh3 shards after respwaning.</b>
 
 #### Load-balancer side logs
 

@@ -286,18 +286,18 @@ class Manager:
                     self.last_tx_ids[tablename] = tx_id
                     lock.release_writer()
 
-                    # Refresh the failed servers
-                    # Use Copy_database to get the data from the primary server
-                    resp, status = self.Copy_database({"shards": [tablename]})
-                    if status != 200:
-                        return f"Failed to copy data from primary server: {status}", 500, -1
-                    full_data = resp[tablename]
-                    payload = {
-                        "shard": tablename,
-                        "data": full_data,
-                        "latest_tx_id": tx_id
-                    }
                     if len(failed_servers) > 0:
+                        # Refresh the failed servers
+                        # Use Copy_database to get the data from the primary server
+                        resp, status = self.Copy_database({"shards": [tablename]})
+                        if status != 200:
+                            return f"Failed to copy data from primary server: {status}", 500, -1
+                        full_data = resp[tablename]
+                        payload = {
+                            "shard": tablename,
+                            "data": full_data,
+                            "latest_tx_id": tx_id
+                        }
                         async with aiohttp.ClientSession() as session:
                             tasks = [communicate_with_server(session, server, "refresh", payload) for server in failed_servers]
                             responses = await asyncio.gather(*tasks)
@@ -415,18 +415,18 @@ class Manager:
                     self.last_tx_ids[tablename] = tx_id
                     lock.release_writer()
 
-                    # Refresh the failed servers
-                    # Use Copy_database to get the data from the primary server
-                    resp, status = self.Copy_database({"shards": [tablename]})
-                    if status != 200:
-                        return f"Failed to copy data from primary server: {status}", 500
-                    full_data = resp[tablename]
-                    payload = {
-                        "shard": tablename,
-                        "data": full_data,
-                        "latest_tx_id": tx_id
-                    }
                     if len(failed_servers) > 0:
+                        # Refresh the failed servers
+                        # Use Copy_database to get the data from the primary server
+                        resp, status = self.Copy_database({"shards": [tablename]})
+                        if status != 200:
+                            return f"Failed to copy data from primary server: {status}", 500
+                        full_data = resp[tablename]
+                        payload = {
+                            "shard": tablename,
+                            "data": full_data,
+                            "latest_tx_id": tx_id
+                        }
                         async with aiohttp.ClientSession() as session:
                             tasks = [communicate_with_server(session, server, "refresh", payload) for server in failed_servers]
                             responses = await asyncio.gather(*tasks)
@@ -539,18 +539,18 @@ class Manager:
                     self.last_tx_ids[tablename] = tx_id
                     lock.release_writer()
 
-                    # Refresh the failed servers
-                    # Use Copy_database to get the data from the primary server
-                    resp, status = self.Copy_database({"shards": [tablename]})
-                    if status != 200:
-                        return f"Failed to copy data from primary server: {status}", 500
-                    full_data = resp[tablename]
-                    payload = {
-                        "shard": tablename,
-                        "data": full_data,
-                        "latest_tx_id": tx_id
-                    }
                     if len(failed_servers) > 0:
+                        # Refresh the failed servers
+                        # Use Copy_database to get the data from the primary server
+                        resp, status = self.Copy_database({"shards": [tablename]})
+                        if status != 200:
+                            return f"Failed to copy data from primary server: {status}", 500
+                        full_data = resp[tablename]
+                        payload = {
+                            "shard": tablename,
+                            "data": full_data,
+                            "latest_tx_id": tx_id
+                        }
                         async with aiohttp.ClientSession() as session:
                             tasks = [communicate_with_server(session, server, "refresh", payload) for server in failed_servers]
                             responses = await asyncio.gather(*tasks)
@@ -701,6 +701,36 @@ class Manager:
 
         except Exception as e:
             return e, 500
+        
+    def Copy_full_database(self):
+        try:
+            if not self.sql_handler.connected:
+                message, status = self.sql_handler.connect()
+                if status != 200:
+                    return message, status
+
+            database_copy = {}
+            for table_name in self.log_files:
+                table_rows,status = self.sql_handler.Get_table_rows(table_name) 
+                # Remove first column (auto increment ID column) from each row and convert to list of dictionaries
+                len_row = len(table_rows[0]) if table_rows else 0
+                dict_table_rows = [{self.schema[i-1]: row[i] for i in range(1, len_row)} for row in table_rows]
+                database_copy[table_name] = dict_table_rows
+                # lock = self.log_file_locks[table_name]
+                # lock.acquire_reader()
+                # latest_tx_id = self.last_tx_ids[table_name]
+                # lock.release_reader()
+                # database_copy['latest_tx_ids'][table_name] = latest_tx_id
+
+                if status != 200:
+                    message = table_rows
+                    return message, status
+
+            return database_copy, 200
+
+        except Exception as e:
+            return e, 500
+
 
 async def communicate_with_server(session: aiohttp.ClientSession, server, endpoint, payload={}):
     try:

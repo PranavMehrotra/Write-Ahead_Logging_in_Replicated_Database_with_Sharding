@@ -212,6 +212,7 @@ async def send_requests(
                 # num_bundled_requests reqs, each of 100 data points
                 # tasks = [write_shard(sem, session, {"data": [{"Stud_id": ids[i*100 + j], "Stud_name": generate_random_string(), "Stud_marks": random.randint(0, 100)} for j in range(100)]}) for i in range(num_bundled_requests)]
                 # num_requests reqs, with 1 data point each
+                ids = [1000, 2000, 5000, 5001, 9000, 9001, 13000, 13001]
                 data = [{"data": [{"Stud_id": id, "Stud_name": generate_random_string(), "Stud_marks": random.randint(0, 100)}]} for id in ids]
                 print("Data to be written: ")
                 pprint(data)

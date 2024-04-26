@@ -331,6 +331,31 @@ async def get_latest_tx_id(request):
         return web.json_response({"error": "Internal Server Error"}, status=500)
 
 
+async def copy_full_database(request):
+    try:
+        print("Copy full database endpoint called")
+        message, status = mgr.Copy_full_database()
+        
+        response_data = {}
+        # Create a response JSON
+        if status==200:
+            response_data = message
+            response_data['status'] = "success"
+
+        else:
+            response_data = {
+                # "error": message,
+                "message": str(message),
+                # "message": f"<Error>: {message}",
+                "status": "failure"
+            }
+        
+        return web.json_response(response_data, status=status)
+    
+    except Exception as e:
+        
+        print(f"Server: Error in copy full database endpoint: {str(e)}")
+        return web.json_response({"error": "Internal Server Error"}, status=500) 
         
 # Catch-all endpoint for any other request
 async def not_found(request):
@@ -354,6 +379,7 @@ def run_server():
     app.router.add_get('/rollback', rollback)
     app.router.add_post('/refresh', refresh_table)
     app.router.add_post('/latest_tx_id', get_latest_tx_id)
+    app.router.add_get('/copy_full', copy_full_database)
 
 
     # Add a catch-all route for any other endpoint, which returns a 400 Bad Request

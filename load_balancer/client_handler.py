@@ -218,7 +218,7 @@ async def communicate_with_server(server, endpoint, payload={}):
 def synchronous_communicate_with_server(server, endpoint, payload={}):
     try:
         request_url = f'http://{server}:{SERVER_PORT}/{endpoint}'
-        if endpoint == "copy" or endpoint == "commit" or endpoint == "rollback":
+        if endpoint == "copy" or endpoint == "commit" or endpoint == "rollback" or endpoint == "copy_full":
             response = requests.get(request_url, json=payload)
             return response.status_code, response.json()
             
@@ -1309,6 +1309,26 @@ async def del_data_handler(request):
         return web.json_response(response_json, status=400)
     
 
+# Function to handle /read/{server} endpoint, to read the data of all the shards of the specificied server
+async def read_server_handler(request):
+    global lb
+    server = request.match_info['server']
+    print(f"client_handler: Received Request to read data from server: {server}", flush=True)
+    default_response_json = {
+        "message": f"<Error> Internal Server Error: The requested data could not be read",
+        "status": "failure"
+    }
+    
+    # Call /copy_full endpoint of the server to read the data
+    status, response = synchronous_communicate_with_server(server, "copy_full", {})
+    if status!=200:
+        print(f"client_handler: Failed to read data from server: {server}")
+        print(f"client_handler: Error: {response.get('message', 'Unknown Error')}", flush=True)
+        return web.json_response(default_response_json, status=500)
+    
+    return web.json_response(response, status=200)
+
+
 # Function to send a heartbeat to the db server and return True if the server is alive, else False
 def heartbeat_db_server():
     try:
@@ -1751,7 +1771,7 @@ async def not_found(request):
     global lb
     print(f"client_handler: Invalid Request Received: {request.rel_url}", flush=True)
     response_json = {
-        "message": f"<Error> '{request.rel_url}' endpoint does not exist in server replicas",
+        "message": f"<Error> '{request.rel_url}' endpoint does not exist!",
         "status": "failure"
     }
     return web.json_response(response_json, status=400)
@@ -1983,6 +2003,7 @@ def run_load_balancer():
     app.router.add_post('/write', write_data_handler)
     app.router.add_put('/update', update_data_handler)
     app.router.add_delete('/del', del_data_handler)
+    app.router.add_get('/read/{server}', read_server_handler)
     
     
     # For communicating b/w Shard Manager and Load Balancer

@@ -12,7 +12,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from RWLock import RWLock
 # from docker_utils import kill_server_cntnr
 
-HEARTBEAT_INTERVAL = 0.2
+HEARTBEAT_INTERVAL = 240
 SEND_FIRST_HEARTBEAT_AFTER = 2
 SERVER_PORT = 5000
 LB_IP_ADDR = 'load_balancer_con'

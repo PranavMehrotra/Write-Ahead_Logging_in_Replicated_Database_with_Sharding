@@ -1,6 +1,6 @@
 <font size=3>
 
-# Assignment-2 Distributed Systems
+# Assignment-3 Distributed Systems
 This repository contains the code for the Assignment-3 of Distributed Systems(CS60002) course of Spring, 2024.
 
 # Implementing a Write-Ahead Logging for consistency in Replicated Database with Sharding
